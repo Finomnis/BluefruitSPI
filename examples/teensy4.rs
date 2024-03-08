@@ -63,6 +63,7 @@ mod spi {
         }
 
         fn busy(&mut self) -> bool {
+            cortex_m::asm::dsb();
             ral::read_reg!(ral::lpspi, self.lpspi, SR, MBF == MBF_1)
         }
     }
@@ -77,7 +78,7 @@ mod spi {
         fn transmit(&mut self, mut data: &[u8]) -> Result<(), Self::Error> {
             while self.busy() {}
 
-            log::debug!("Sdep data: {:02x?}", data);
+            // log::debug!("Sdep data: {:02x?}", data);
 
             let framesz = (data.len() * 8 - 1) as u32;
             ral::write_reg!(ral::lpspi, self.lpspi, TCR, RXMSK: RXMSK_1, FRAMESZ: framesz);
@@ -250,7 +251,9 @@ mod app {
     async fn ble(ctx: ble::Context) {
         let ble::LocalResources { ble, .. } = ctx.local;
 
-        ble.init().await.unwrap();
+        loop {
+            ble.init().await.unwrap();
+        }
     }
 
     #[task(binds = USB_OTG1, priority = 5, local = [rebootor])]

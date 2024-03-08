@@ -96,11 +96,13 @@ where
         &mut self,
         msg: sdep::Message<'a>,
     ) -> Result<(), Error<SPI::Error>> {
+        let data = msg.to_bytes(&mut self.buffer);
+
         self.cs.set_low().unwrap();
         self.delay.delay_us(delays::CS_TO_SCK_US).await;
 
         self.spi
-            .transmit(msg.to_bytes(&mut self.buffer))
+            .transmit(data)
             .map_err(|source| Error::SpiBus { source })?;
 
         self.cs.set_high().unwrap();
