@@ -29,7 +29,6 @@ strum = { version = "0.26.1", default-features = false, features = ["derive"] }
 
 rtic = { version = "2.1.0", features = ["thumbv7-backend"] }
 
-cortex-m = "0.7.7"
 teensy4-bsp = { version = "0.4.7", features = ["rt"] }
 teensy4-panic = { version = "0.2.3", default-features = false }
 teensy4-selfrebootor = "0.2.0"

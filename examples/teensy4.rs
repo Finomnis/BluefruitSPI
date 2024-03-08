@@ -63,7 +63,6 @@ mod spi {
         }
 
         fn busy(&mut self) -> bool {
-            cortex_m::asm::dsb();
             ral::read_reg!(ral::lpspi, self.lpspi, SR, MBF == MBF_1)
         }
     }
@@ -79,6 +78,8 @@ mod spi {
             while self.busy() {}
 
             // log::debug!("Sdep data: {:02x?}", data);
+
+            ral::write_reg!(ral::lpspi, self.lpspi, SR, TCF: TCF_1);
 
             let framesz = (data.len() * 8 - 1) as u32;
             ral::write_reg!(ral::lpspi, self.lpspi, TCR, RXMSK: RXMSK_1, FRAMESZ: framesz);
@@ -96,7 +97,7 @@ mod spi {
                 data = data.get(4..).unwrap_or_default();
             }
 
-            while self.busy() {}
+            while ral::read_reg!(ral::lpspi, self.lpspi, SR, TCF != TCF_1) {}
 
             Ok(())
         }
@@ -106,8 +107,12 @@ mod spi {
 
             while self.busy() {}
 
+            ral::write_reg!(ral::lpspi, self.lpspi, SR, FCF: FCF_1);
+
             let framesz = (buffer.len() * 8 - 1) as u32;
             ral::write_reg!(ral::lpspi, self.lpspi, TCR, TXMSK: TXMSK_1, FRAMESZ: framesz);
+
+            while ral::read_reg!(ral::lpspi, self.lpspi, SR, FCF != FCF_1) {}
 
             while !buffer.is_empty() {
                 let mut word = ral::read_reg!(ral::lpspi, self.lpspi, RDR);
