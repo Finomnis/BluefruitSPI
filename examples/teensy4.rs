@@ -135,6 +135,7 @@ imxrt_uart_panic::register!(LPUART6, P1, P0, 115200, teensy4_panic::sos);
 mod app {
     use super::bsp;
 
+    use bluefruitspi::BluefruitSPI;
     use bsp::board;
     use bsp::hal;
     use bsp::logging;
@@ -145,6 +146,9 @@ mod app {
     use usb_device::bus::UsbBusAllocator;
 
     use teensy4_selfrebootor::Rebootor;
+
+    use rtic_monotonics::imxrt::prelude::*;
+    imxrt_gpt1_monotonic!(Mono, board::PERCLK_FREQUENCY);
 
     /// This allocation is shared across all USB endpoints. It needs to be large
     /// enough to hold the maximum packet size for *all* endpoints. If you start
@@ -175,6 +179,10 @@ mod app {
             pins,
             usb,
             lpuart6,
+            mut gpt1,
+            lpspi4,
+            mut gpio2,
+            mut gpio3,
             ..
         } = board::t40(cx.device);
 
@@ -198,6 +206,23 @@ mod app {
         let bus = BusAdapter::with_speed(usb, &EP_MEMORY, &EP_STATE, Speed::LowFull);
         let bus = cx.local.bus.insert(UsbBusAllocator::new(bus));
         let rebootor = teensy4_selfrebootor::Rebootor::new(bus);
+
+        // Monotonic
+        gpt1.set_clock_source(hal::gpt::ClockSource::PeripheralClock);
+        Mono::start(gpt1.release());
+
+        // SPI
+        let ble_cs = gpio2.output(pins.p10);
+        let ble_irq = gpio3.input(pins.p39);
+        let ble_rst = gpio3.output(pins.p38);
+        let ble_spi = crate::spi::ImxrtSdepSpi::new(
+            lpspi4,
+            pins.p11,
+            pins.p12,
+            pins.p13,
+            board::LPSPI_FREQUENCY,
+        );
+        let ble = BluefruitSPI::new(ble_spi, ble_cs, ble_rst, ble_irq, Mono);
 
         (
             Shared {},

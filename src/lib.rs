@@ -61,7 +61,7 @@ where
     SPI: SpiBus,
     CS: embedded_hal::digital::OutputPin,
     RST: embedded_hal::digital::OutputPin,
-    IRQ: embedded_hal::digital::InputPin + embedded_hal_async::digital::Wait,
+    IRQ: embedded_hal::digital::InputPin, //TODO: use interrupts + embedded_hal_async::digital::Wait,
     DELAY: embedded_hal_async::delay::DelayNs,
 {
     /// Create a new instance of this driver.

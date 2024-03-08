@@ -42,10 +42,8 @@ imxrt-log = { version = "0.1.1", default-features = false, features = [
 ] }
 
 embedded-io = "0.6.1"
-rtic-monotonics = { version = "1.5.0", features = [
-    "imxrt_gpt1",
-    "embedded-hal-async",
-] }
+rtic-monotonics = { version = "2.0.0", features = ["imxrt_gpt1"] }
 
 [patch.crates-io]
 imxrt-hal = { git = "https://github.com/Finomnis/imxrt-hal", branch = "eh1-uart" }
+rtic-monotonics = { git = "https://github.com/Finomnis/rtic", branch = "monotonic_rewrite" }
