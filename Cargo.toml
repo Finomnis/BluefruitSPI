@@ -1,0 +1,35 @@
+[package]
+name = "bluefruitspi"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.21"
+
+
+[dev-dependencies]
+
+rtic = { version = "2.1.0", features = ["thumbv7-backend"] }
+
+teensy4-bsp = { version = "0.4.7", features = ["rt"] }
+teensy4-panic = { version = "0.2.3", default-features = false }
+teensy4-selfrebootor = "0.2.0"
+
+usb-device = "0.2.9"
+
+imxrt-uart-panic = "0.1.2"
+imxrt-log = { version = "0.1.1", default-features = false, features = [
+    "log",
+    "lpuart",
+] }
+
+embedded-io = "0.6.1"
+rtic-monotonics = { version = "1.5.0", features = [
+    "imxrt_gpt1",
+    "embedded-hal-async",
+] }
+
+[patch.crates-io]
+imxrt-hal = { git = "https://github.com/Finomnis/imxrt-hal", branch = "eh1-uart" }
