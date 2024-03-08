@@ -11,6 +11,9 @@ use snafu::prelude::*;
 mod delays;
 pub mod sdep;
 
+/// The recommended SPI bitrate for communication
+pub const RECOMMENDED_SPI_BITRATE_HZ: u32 = 4_000_000;
+
 /// SPI Bus the Adafruit Bluefruit LE SPI Friend is attached to.
 ///
 /// The bus should run at 4MHz, SPI Mode 0, MSB first.
