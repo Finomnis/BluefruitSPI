@@ -5,6 +5,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod delays;
+pub mod sdep;
 
 /// SPI Bus the Adafruit Bluefruit LE SPI Friend is attached to.
 ///
