@@ -77,6 +77,9 @@ mod spi {
         fn transmit(&mut self, mut data: &[u8]) -> Result<(), Self::Error> {
             while self.busy() {}
 
+            // Reset FIFOS
+            ral::modify_reg!(ral::lpspi, self.lpspi, CR, RRF: RRF_1, RTF: RTF_1);
+
             // log::debug!("Sdep data: {:02x?}", data);
 
             ral::write_reg!(ral::lpspi, self.lpspi, SR, TCF: TCF_1);
@@ -106,6 +109,9 @@ mod spi {
             let mut buffer = buffer.as_mut_slice();
 
             while self.busy() {}
+
+            // Reset FIFOS
+            ral::modify_reg!(ral::lpspi, self.lpspi, CR, RRF: RRF_1, RTF: RTF_1);
 
             ral::write_reg!(ral::lpspi, self.lpspi, SR, FCF: FCF_1);
 
@@ -258,6 +264,14 @@ mod app {
 
         loop {
             ble.init().await.unwrap();
+
+            ble.command(b"AT+FACTORYRESET").await.unwrap();
+            Mono::delay(1.secs_at_least()).await;
+
+            log::info!(
+                "ATI Command:\n{}",
+                core::str::from_utf8(ble.command(b"ATI").await.unwrap()).unwrap()
+            );
         }
     }
 

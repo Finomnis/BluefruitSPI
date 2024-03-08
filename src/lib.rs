@@ -46,14 +46,65 @@ pub trait SpiBus {
     fn receive(&mut self, buffer: &mut [u8; 20]) -> Result<(), Self::Error>;
 }
 
-/// Driver for Adafruit Bluefruit LE SPI Friend.
-pub struct BluefruitSPI<SPI, CS, RST, IRQ, DELAY> {
+struct SdepDriver<SPI, CS> {
     spi: SPI,
     cs: CS,
+    buffer: [u8; 20],
+}
+
+/// Driver for Adafruit Bluefruit LE SPI Friend.
+pub struct BluefruitSPI<SPI, CS, RST, IRQ, DELAY> {
+    sdep: SdepDriver<SPI, CS>,
     _reset: RST,
     irq: IRQ,
     delay: DELAY,
-    buffer: [u8; 20],
+    command_buffer: [u8; 256],
+}
+
+impl<SPI, CS> SdepDriver<SPI, CS>
+where
+    SPI: SpiBus,
+    CS: embedded_hal::digital::OutputPin,
+{
+    /// Write a raw SDEP message to the device
+    async fn write<'a, DELAY: embedded_hal_async::delay::DelayNs>(
+        &mut self,
+        msg: sdep::Message<'a>,
+        delay: &mut DELAY,
+    ) -> Result<(), Error<SPI::Error>> {
+        let data = msg.to_bytes(&mut self.buffer);
+
+        self.cs.set_low().unwrap();
+        delay.delay_us(delays::CS_TO_SCK_US).await;
+
+        self.spi
+            .transmit(data)
+            .map_err(|source| Error::SpiBus { source })?;
+
+        self.cs.set_high().unwrap();
+        delay.delay_us(delays::AFTER_SDEP_WRITE_US).await;
+
+        Ok(())
+    }
+
+    /// Write a raw SDEP message to the device
+    async fn read<DELAY: embedded_hal_async::delay::DelayNs>(
+        &mut self,
+        delay: &mut DELAY,
+    ) -> Result<sdep::Message, Error<SPI::Error>> {
+        self.cs.set_low().unwrap();
+        delay.delay_us(delays::CS_TO_SCK_US).await;
+
+        let buffer = &mut self.buffer;
+        self.spi
+            .receive(buffer)
+            .map_err(|source| Error::SpiBus { source })?;
+
+        self.cs.set_high().unwrap();
+        delay.delay_us(delays::AFTER_SDEP_READ_US).await;
+
+        sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source })
+    }
 }
 
 impl<SPI, CS, RST, IRQ, DELAY> BluefruitSPI<SPI, CS, RST, IRQ, DELAY>
@@ -82,65 +133,97 @@ where
         cassette::block_on(delay.delay_ms(delays::AFTER_RESET_MS));
 
         Self {
-            spi,
-            cs,
+            sdep: SdepDriver {
+                spi,
+                cs,
+                buffer: [0u8; 20],
+            },
             _reset: reset,
             irq,
             delay,
-            buffer: [0u8; 20],
+            command_buffer: [0u8; 256],
         }
-    }
-
-    /// Write a raw SDEP message to the device
-    async fn write_sdep_message<'a>(
-        &mut self,
-        msg: sdep::Message<'a>,
-    ) -> Result<(), Error<SPI::Error>> {
-        let data = msg.to_bytes(&mut self.buffer);
-
-        self.cs.set_low().unwrap();
-        self.delay.delay_us(delays::CS_TO_SCK_US).await;
-
-        self.spi
-            .transmit(data)
-            .map_err(|source| Error::SpiBus { source })?;
-
-        self.cs.set_high().unwrap();
-        self.delay.delay_us(delays::AFTER_SDEP_WRITE_US).await;
-
-        Ok(())
-    }
-
-    /// Write a raw SDEP message to the device
-    async fn read_sdep_message(&mut self) -> Result<sdep::Message, Error<SPI::Error>> {
-        self.cs.set_low().unwrap();
-        self.delay.delay_us(delays::CS_TO_SCK_US).await;
-
-        let buffer = &mut self.buffer;
-        self.spi
-            .receive(buffer)
-            .map_err(|source| Error::SpiBus { source })?;
-
-        self.cs.set_high().unwrap();
-        self.delay.delay_us(delays::AFTER_SDEP_READ_US).await;
-
-        sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source })
     }
 
     /// Sends the SDEP initialize command, which causes the board to reset.
     /// This command should complete in under 1s.
     pub async fn init(&mut self) -> Result<(), Error<SPI::Error>> {
         let result = self
-            .write_sdep_message(sdep::Message::Command {
-                id: sdep::CommandType::Initialize.into(),
-                payload: &[],
-                more_data: false,
-            })
+            .sdep
+            .write(
+                sdep::Message::Command {
+                    id: sdep::CommandType::Initialize.into(),
+                    payload: &[],
+                    more_data: false,
+                },
+                &mut self.delay,
+            )
             .await;
 
         self.delay.delay_ms(delays::AFTER_INIT_MS).await;
 
         result
+    }
+
+    async fn raw_command(
+        &mut self,
+        data_iter: &mut dyn Iterator<Item = u8>,
+    ) -> Result<&[u8], Error<SPI::Error>> {
+        let mut data = {
+            let mut data_size = 0;
+            let data = &mut self.command_buffer[..127];
+
+            for elem in data.iter_mut() {
+                match data_iter.next() {
+                    Some(val) => {
+                        *elem = val;
+                        data_size += 1;
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+
+            if data_iter.next().is_some() {
+                return Err(Error::CommandPayloadTooLong);
+            }
+
+            &data[..data_size]
+        };
+
+        while !data.is_empty() {
+            let more_data = data.len() > 16;
+            let payload_len = data.len().min(16);
+            let (payload, leftover) = data.split_at(payload_len);
+            data = leftover;
+
+            self.sdep
+                .write(
+                    sdep::Message::Command {
+                        id: sdep::CommandType::AtWrapper.into(),
+                        payload,
+                        more_data,
+                    },
+                    &mut self.delay,
+                )
+                .await?;
+        }
+
+        todo!()
+    }
+
+    /// Send a fully formed bytestring AT command, and check
+    /// whether we got an 'OK' back.
+    ///
+    /// # Returns
+    ///
+    /// The response payload, if there are any.
+    pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
+        let msg = self
+            .raw_command(&mut command.iter().copied().chain(b"\r\n".iter().copied()))
+            .await?;
+        msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
     }
 }
 
@@ -157,4 +240,10 @@ pub enum Error<SpiError: snafu::AsErrorSource> {
         /// The underlying error
         source: sdep::Error,
     },
+    /// The payload of a the command was too long
+    CommandPayloadTooLong,
+    /// The payload of a the response was too long
+    ResponsePayloadTooLong,
+    /// The command did not return the `OK` message
+    NotOk,
 }
