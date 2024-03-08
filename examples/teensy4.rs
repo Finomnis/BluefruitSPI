@@ -1,6 +1,4 @@
-// This example demonstrates a program that also acts as a rebootor.
-// When being programmed with the `-r` flag, it will reboot itself into
-// the bootloader.
+// This example demonstrates the usage of this crate on a Teensy MicroMod board.
 
 #![no_std]
 #![no_main]
@@ -131,14 +129,14 @@ mod spi {
 use bsp::pins::common::{P0, P1};
 imxrt_uart_panic::register!(LPUART6, P1, P0, 115200, teensy4_panic::sos);
 
-#[rtic::app(device = teensy4_bsp)]
+#[rtic::app(device = teensy4_bsp, dispatchers = [CAN1, CAN2, CAN3])]
 mod app {
     use super::bsp;
 
-    use bluefruitspi::BluefruitSPI;
     use bsp::board;
     use bsp::hal;
     use bsp::logging;
+    use bsp::pins;
 
     use embedded_io::Write;
 
@@ -146,6 +144,8 @@ mod app {
     use usb_device::bus::UsbBusAllocator;
 
     use teensy4_selfrebootor::Rebootor;
+
+    use bluefruitspi::BluefruitSPI;
 
     use rtic_monotonics::imxrt::prelude::*;
     imxrt_gpt1_monotonic!(Mono, board::PERCLK_FREQUENCY);
@@ -166,6 +166,13 @@ mod app {
         poll_log: hal::pit::Pit<3>,
         log_poller: logging::Poller,
         rebootor: Rebootor<'static>,
+        ble: BluefruitSPI<
+            crate::spi::ImxrtSdepSpi<4>,
+            hal::gpio::Output<pins::common::P10>,
+            hal::gpio::Output<pins::common::P14>,
+            hal::gpio::Input<pins::tmm::P39>,
+            Mono,
+        >,
     }
 
     #[shared]
@@ -181,10 +188,11 @@ mod app {
             lpuart6,
             mut gpt1,
             lpspi4,
+            mut gpio1,
             mut gpio2,
             mut gpio3,
             ..
-        } = board::t40(cx.device);
+        } = board::tmm(cx.device);
 
         // Logging
         let log_dma = dma[LOG_DMA_CHANNEL].take().unwrap();
@@ -202,11 +210,6 @@ mod app {
         poll_log.set_load_timer_value(LOG_POLL_INTERVAL);
         poll_log.enable();
 
-        // USB
-        let bus = BusAdapter::with_speed(usb, &EP_MEMORY, &EP_STATE, Speed::LowFull);
-        let bus = cx.local.bus.insert(UsbBusAllocator::new(bus));
-        let rebootor = teensy4_selfrebootor::Rebootor::new(bus);
-
         // Monotonic
         gpt1.set_clock_source(hal::gpt::ClockSource::PeripheralClock);
         Mono::start(gpt1.release());
@@ -214,7 +217,7 @@ mod app {
         // SPI
         let ble_cs = gpio2.output(pins.p10);
         let ble_irq = gpio3.input(pins.p39);
-        let ble_rst = gpio3.output(pins.p38);
+        let ble_rst = gpio1.output(pins.p14);
         let ble_spi = crate::spi::ImxrtSdepSpi::new(
             lpspi4,
             pins.p11,
@@ -224,14 +227,30 @@ mod app {
         );
         let ble = BluefruitSPI::new(ble_spi, ble_cs, ble_rst, ble_irq, Mono);
 
+        // USB
+        let bus = BusAdapter::with_speed(usb, &EP_MEMORY, &EP_STATE, Speed::LowFull);
+        let bus = cx.local.bus.insert(UsbBusAllocator::new(bus));
+        let rebootor = teensy4_selfrebootor::Rebootor::new(bus);
+
+        // Spawn tasks
+        ble::spawn().unwrap();
+
         (
             Shared {},
             Local {
                 log_poller,
                 poll_log,
                 rebootor,
+                ble,
             },
         )
+    }
+
+    #[task(priority = 3, local = [ble])]
+    async fn ble(ctx: ble::Context) {
+        let ble::LocalResources { ble, .. } = ctx.local;
+
+        ble.init().await.unwrap();
     }
 
     #[task(binds = USB_OTG1, priority = 5, local = [rebootor])]
