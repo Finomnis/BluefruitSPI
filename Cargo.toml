@@ -5,9 +5,18 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+# Uses smaller delays than the original circuitpython library.
+# This increases performance, but might reduce stability.
+# It is unclear why delays in the original library are so big;
+# they are much longer than specified in Adafruit's documentation.
+tighter-delays = []
+
 [dependencies]
 log = "0.4.21"
-
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+cassette = "0.2.5"
 
 [dev-dependencies]
 
