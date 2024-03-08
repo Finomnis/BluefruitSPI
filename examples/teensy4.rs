@@ -64,7 +64,7 @@ mod app {
             uart.enable_fifo(hal::lpuart::Watermark::tx(4));
         });
         log_uart
-            .write_all("\r\n===== Rebootor example =====\r\n\r\n".as_bytes())
+            .write_all("\r\n===== Bluefruit LE SPI Friend example =====\r\n\r\n".as_bytes())
             .unwrap();
         log_uart.flush().unwrap();
         let log_poller =
