@@ -11,6 +11,10 @@ use snafu::prelude::*;
 mod delays;
 pub mod sdep;
 
+#[cfg(feature = "imxrt")]
+#[cfg_attr(docsrs, doc(cfg(feature = "imxrt")))]
+pub mod imxrt;
+
 /// The recommended SPI bitrate for communication
 pub const RECOMMENDED_SPI_BITRATE_HZ: u32 = 4_000_000;
 
@@ -33,7 +37,7 @@ pub trait SpiBus {
     ///
     /// # Arguments
     ///
-    /// * `data` - The data to be sent to the bus.
+    /// * `data` - The data to be sent to the bus. Guaranteed to be 20 bytes or less.
     fn transmit(&mut self, data: &[u8]) -> Result<(), Self::Error>;
 
     /// Reads data from the bus.
@@ -293,11 +297,11 @@ where
     }
 
     /// Send a fully formed bytestring AT command, and check
-    /// whether we got an 'OK' back.
+    /// whether we got an `OK` back.
     ///
     /// # Returns
     ///
-    /// The response payload, if there are any.
+    /// The response payload, if there is any.
     pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
         let msg = self
             .raw_command(&mut command.iter().copied().chain(b"\n".iter().copied()))
@@ -316,31 +320,37 @@ where
 /// The error type of this crate
 #[derive(Debug, Snafu)]
 pub enum Error<SpiError: snafu::AsErrorSource> {
-    /// An SPI bus error
+    /// An SPI bus error.
     SpiBus {
-        /// The underlying error
+        /// The underlying error.
         source: SpiError,
     },
-    /// An SDEP protocol error
+    /// An SDEP protocol error.
     Sdep {
-        /// The underlying error
+        /// The underlying error.
         source: sdep::Error,
     },
-    /// The payload of a the command was too long
+    /// The payload of a the command was too long.
     CommandPayloadTooLong,
-    /// The payload of a the response was too long
+    /// The payload of a the response was too long.
     ResponsePayloadTooLong,
-    /// The device stopped answering before the payload was complete
+    /// The device stopped answering before the payload was complete.
     ResponsePayloadIncomplete,
-    /// The device answered with an invalid response
+    /// The device answered with an invalid response.
     ResponseInvalid,
-    /// The device answered with an error code
+    /// The device answered with an error code.
     ErrorResponse {
-        /// The error id
+        /// The error id.
         id: u16,
     },
-    /// The command did not return the `OK` message
+    /// The command did not return the `OK` message.
     NotOk,
-    /// Timeout while waiting for device response
+    /// Timeout while waiting for device response.
     Timeout,
 }
+
+/// An impossible error; this error can never happen.
+///
+/// Same as [`core::convert::Infallible`], but with [`snafu`] support.
+#[derive(Debug, Snafu)]
+pub enum Infallible {}

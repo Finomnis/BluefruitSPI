@@ -11,5 +11,9 @@
     "rust-analyzer.linkedProjects": [
         "Cargo.toml",
     ],
-    "rust-analyzer.check.features": [],
+    "rust-analyzer.cargo.features": [
+        "imxrt",
+        "imxrt-iomuxc/imxrt1060",
+        "imxrt-ral/imxrt1062",
+    ],
 }

@@ -6,11 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-# Uses smaller delays than the original circuitpython library.
-# This increases performance, but might reduce stability.
-# It is unclear why delays in the original library are so big;
-# they are much longer than specified in Adafruit's documentation.
-tighter-delays = []
+# Enables the i.MX RT SPI driver
+imxrt = ["dep:imxrt-ral", "dep:imxrt-iomuxc"]
 
 [dependencies]
 
@@ -24,6 +21,10 @@ snafu = { version = "0.8.1", default-features = false, features = [
     "rust_1_65",
 ] }
 strum = { version = "0.26.1", default-features = false, features = ["derive"] }
+
+imxrt-ral = { version = "0.5.3", optional = true }
+imxrt-iomuxc = { version = "0.2.6", optional = true }
+
 
 [dev-dependencies]
 
@@ -67,3 +68,10 @@ incremental = false
 lto = 'fat'
 opt-level = 3            # <-
 overflow-checks = false  # <-
+
+[package.metadata.docs.rs]
+# To build locally:
+# RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --features "imxrt-iomuxc/imxrt1060,imxrt-ral/imxrt1062" --no-deps --open
+all-features = true
+features = ["imxrt-iomuxc/imxrt1060", "imxrt-ral/imxrt1062"]
+rustdoc-args = ["--cfg", "docsrs"]
