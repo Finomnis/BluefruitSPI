@@ -271,6 +271,12 @@ mod app {
             "ATI Command:\r\n{}",
             core::str::from_utf8(ble.command(b"ATI").await.unwrap()).unwrap()
         );
+
+        loop {
+            let connected = ble.connected().await.unwrap();
+            log::info!("Connected: {:?}", connected);
+            Mono::delay(100.millis_at_least()).await;
+        }
     }
 
     #[task(binds = USB_OTG1, priority = 5, local = [rebootor])]

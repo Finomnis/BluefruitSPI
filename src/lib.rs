@@ -304,6 +304,13 @@ where
             .await?;
         msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
     }
+
+    /// Whether the Bluefruit module is connected to the central
+    pub async fn connected(&mut self) -> Result<bool, Error<SPI::Error>> {
+        self.command(b"AT+GAPGETCONN")
+            .await
+            .map(|val| val == b"1\r\n")
+    }
 }
 
 /// The error type of this crate
