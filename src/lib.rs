@@ -109,15 +109,23 @@ where
 
         let result = sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source });
 
-        if let Ok(msg) = &result {
-            if msg.more_data() {
-                delay.delay_us(delays::BETWEEN_SDEP_READ_US).await;
-            } else {
-                delay.delay_us(delays::AFTER_SDEP_READ_US).await;
+        let delay_us = match &result {
+            Ok(msg) => {
+                if msg.more_data() {
+                    delays::BETWEEN_SDEP_READ_US
+                } else {
+                    delays::AFTER_SDEP_READ_US
+                }
             }
-        } else {
-            delay.delay_us(delays::AFTER_SDEP_READ_US).await;
-        }
+            Err(e) => match e {
+                Error::Sdep {
+                    source: sdep::Error::DeviceNotReady,
+                } => delays::BETWEEN_SDEP_READ_US,
+                _ => delays::AFTER_SDEP_READ_US,
+            },
+        };
+
+        delay.delay_us(delay_us).await;
 
         result
     }

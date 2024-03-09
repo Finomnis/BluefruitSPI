@@ -262,17 +262,15 @@ mod app {
     async fn ble(ctx: ble::Context) {
         let ble::LocalResources { ble, .. } = ctx.local;
 
-        loop {
-            ble.init().await.unwrap();
+        ble.init().await.unwrap();
 
-            ble.command(b"AT+FACTORYRESET").await.unwrap();
-            Mono::delay(1.secs_at_least()).await;
+        ble.command(b"AT+FACTORYRESET").await.unwrap();
+        Mono::delay(1.secs_at_least()).await;
 
-            log::info!(
-                "ATI Command:\n{}",
-                core::str::from_utf8(ble.command(b"ATI").await.unwrap()).unwrap()
-            );
-        }
+        log::info!(
+            "ATI Command:\r\n{}",
+            core::str::from_utf8(ble.command(b"ATI").await.unwrap()).unwrap()
+        );
     }
 
     #[task(binds = USB_OTG1, priority = 5, local = [rebootor])]
