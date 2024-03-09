@@ -1,4 +1,7 @@
 // This example demonstrates the usage of this crate on a Teensy MicroMod board.
+//
+// It implements a simple `echo` UART service.
+// To connect to it, use the "Bluefruit Connect" Smartphone App.
 
 #![no_std]
 #![no_main]
@@ -131,15 +134,19 @@ mod app {
     async fn ble(ctx: ble::Context) {
         let ble::LocalResources { ble, .. } = ctx.local;
 
+        // Initialize the device and perform a factory reset
         ble.init().await.unwrap();
-
         ble.command(b"AT+FACTORYRESET").await.unwrap();
         Mono::delay(1.secs_at_least()).await;
 
+        // Print the response to 'ATI' (info request)
         log::info!(
             "ATI Command:\r\n{}",
             core::str::from_utf8(ble.command(b"ATI").await.unwrap()).unwrap()
         );
+
+        // Change advertised name
+        ble.command(b"AT+GAPDEVNAME=Rust meets BLE").await.unwrap();
 
         loop {
             let connected = ble.connected().await.unwrap();
@@ -163,7 +170,6 @@ mod app {
 
         if poll_log.is_elapsed() {
             poll_log.clear_elapsed();
-
             log_poller.poll();
         }
     }

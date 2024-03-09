@@ -5,6 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[example]]
+name = "teensy4"
+required-features = ["imxrt"]
+
 [features]
 # Enables the i.MX RT SPI driver
 imxrt = ["dep:imxrt-ral", "dep:imxrt-iomuxc"]
