@@ -10,5 +10,5 @@ mod _delays {
     pub const BETWEEN_SDEP_WRITE_US: u32 = 300;
     pub const CS_TO_SCK_US: u32 = 100;
     pub const RESPONSE_TIMEOUT_MS: u32 = 200;
-    pub const IRQ_POLL_PERIOD_MS: u32 = 10;
+    pub const IRQ_POLL_PERIOD_MS: u32 = 1;
 }
