@@ -82,7 +82,12 @@ where
             .map_err(|source| Error::SpiBus { source })?;
 
         self.cs.set_high().unwrap();
-        delay.delay_us(delays::AFTER_SDEP_WRITE_US).await;
+
+        if msg.more_data() {
+            delay.delay_us(delays::BETWEEN_SDEP_WRITE_US).await;
+        } else {
+            delay.delay_us(delays::AFTER_SDEP_WRITE_US).await;
+        }
 
         Ok(())
     }
@@ -101,9 +106,20 @@ where
             .map_err(|source| Error::SpiBus { source })?;
 
         self.cs.set_high().unwrap();
-        delay.delay_us(delays::AFTER_SDEP_READ_US).await;
 
-        sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source })
+        let result = sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source });
+
+        if let Ok(msg) = &result {
+            if msg.more_data() {
+                delay.delay_us(delays::BETWEEN_SDEP_READ_US).await;
+            } else {
+                delay.delay_us(delays::AFTER_SDEP_READ_US).await;
+            }
+        } else {
+            delay.delay_us(delays::AFTER_SDEP_READ_US).await;
+        }
+
+        result
     }
 }
 
@@ -169,6 +185,7 @@ where
         &mut self,
         data_iter: &mut dyn Iterator<Item = u8>,
     ) -> Result<&[u8], Error<SPI::Error>> {
+        // Prepare data
         let mut data = {
             let mut data_size = 0;
             let data = &mut self.command_buffer[..127];
@@ -192,6 +209,7 @@ where
             &data[..data_size]
         };
 
+        // Send Command
         while !data.is_empty() {
             let more_data = data.len() > 16;
             let payload_len = data.len().min(16);
@@ -210,7 +228,60 @@ where
                 .await?;
         }
 
-        todo!()
+        // Wait for response
+        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
+        while !self.irq.is_high().unwrap() {
+            if timeout_left == 0 {
+                return Err(Error::Timeout);
+            }
+
+            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
+            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
+        }
+
+        // Read response
+        let data = &mut self.command_buffer;
+        let mut data_size = 0;
+
+        loop {
+            if !self.irq.is_high().unwrap() {
+                return Err(Error::ResponsePayloadIncomplete);
+            }
+
+            match self.sdep.read(&mut self.delay).await {
+                Ok(msg) => match msg {
+                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
+                    sdep::Message::Response {
+                        id,
+                        payload,
+                        more_data,
+                    } => {
+                        if id != sdep::CommandType::AtWrapper.into() {
+                            return Err(Error::ResponseInvalid);
+                        }
+                        for word in payload {
+                            *data
+                                .get_mut(data_size)
+                                .ok_or(Error::ResponsePayloadTooLong)? = *word;
+                            data_size += 1;
+                        }
+                        if !more_data {
+                            break;
+                        }
+                    }
+                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
+                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
+                },
+                Err(Error::Sdep {
+                    source: sdep::Error::DeviceNotReady,
+                }) => {
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(&data[..data_size])
     }
 
     /// Send a fully formed bytestring AT command, and check
@@ -221,7 +292,7 @@ where
     /// The response payload, if there are any.
     pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
         let msg = self
-            .raw_command(&mut command.iter().copied().chain(b"\r\n".iter().copied()))
+            .raw_command(&mut command.iter().copied().chain(b"\n".iter().copied()))
             .await?;
         msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
     }
@@ -244,6 +315,17 @@ pub enum Error<SpiError: snafu::AsErrorSource> {
     CommandPayloadTooLong,
     /// The payload of a the response was too long
     ResponsePayloadTooLong,
+    /// The device stopped answering before the payload was complete
+    ResponsePayloadIncomplete,
+    /// The device answered with an invalid response
+    ResponseInvalid,
+    /// The device answered with an error code
+    ErrorResponse {
+        /// The error id
+        id: u16,
+    },
     /// The command did not return the `OK` message
     NotOk,
+    /// Timeout while waiting for device response
+    Timeout,
 }

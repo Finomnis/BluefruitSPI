@@ -240,6 +240,25 @@ impl<'a> Message<'a> {
             Err(Error::UnknownMessageType)
         }
     }
+
+    /// True if the payload will be continued by another message,
+    /// as part of a multi-part transfer.
+    pub fn more_data(&self) -> bool {
+        match self {
+            Message::Command {
+                id: _,
+                payload: _,
+                more_data,
+            } => *more_data,
+            Message::Response {
+                id: _,
+                payload: _,
+                more_data,
+            } => *more_data,
+            Message::Alert { id: _, payload: _ } => false,
+            Message::Error { id: _ } => false,
+        }
+    }
 }
 
 /// All the errors that can happen in the SDEP protocol.
