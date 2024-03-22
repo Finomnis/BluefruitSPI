@@ -149,9 +149,19 @@ mod app {
         ble.command(b"AT+GAPDEVNAME=Rust meets BLE").await.unwrap();
 
         loop {
-            let connected = ble.connected().await.unwrap();
-            log::info!("Connected: {:?}", connected);
-            Mono::delay(100.millis_at_least()).await;
+            while !ble.connected().await.unwrap() {
+                log::info!("Waiting for connection ...");
+                Mono::delay(500.millis_at_least()).await;
+            }
+
+            log::info!("Connected!");
+
+            let mut counter = 0;
+            while ble.connected().await.unwrap() {
+                ble.uart_tx(&[counter]).await.unwrap();
+                counter += 1;
+                Mono::delay(1.secs_at_least()).await;
+            }
         }
     }
 

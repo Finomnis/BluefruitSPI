@@ -304,7 +304,7 @@ where
     /// The response payload, if there is any.
     pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
         let msg = self
-            .raw_command(&mut command.iter().copied().chain(b"\n".iter().copied()))
+            .raw_command(&mut command.iter().chain(b"\n").copied())
             .await?;
         msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
     }
@@ -314,6 +314,22 @@ where
         self.command(b"AT+GAPGETCONN")
             .await
             .map(|val| val == b"1\r\n")
+    }
+
+    /// Sends the specific bytestring out over BLE UART.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The bytestring to send.
+    pub async fn uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
+        let response = self
+            .raw_command(&mut b"AT+BLEUARTTX=".iter().chain(data).chain(b"\r\n").copied())
+            .await?;
+        if response == b"OK\r\n" {
+            Ok(())
+        } else {
+            Err(Error::NotOk)
+        }
     }
 }
 
