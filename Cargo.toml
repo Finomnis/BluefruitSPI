@@ -20,7 +20,7 @@ embedded-hal-async = "1.0.0"
 
 log = "0.4.21"
 
-cassette = "0.2.5"
+cassette = "0.3.0"
 snafu = { version = "0.8.1", default-features = false, features = [
     "rust_1_65",
 ] }
@@ -50,8 +50,8 @@ embedded-io = "0.6.1"
 rtic-monotonics = { version = "2.0.0", features = ["imxrt_gpt1"] }
 
 [patch.crates-io]
-imxrt-hal = { git = "https://github.com/Finomnis/imxrt-hal", branch = "eh1-uart" }
-rtic-monotonics = { git = "https://github.com/Finomnis/rtic", branch = "monotonic_rewrite" }
+imxrt-hal = { git = "https://github.com/imxrt-rs/imxrt-hal", rev = "b9a82455ffa967b5612ec5ecee52c2b11d45e6cc" }
+rtic-monotonics = { git = "https://github.com/rtic-rs/rtic", rev = "04b655d4faa7b93c8e3838bbad46efb72f5f4570" }
 
 
 # cargo build/run

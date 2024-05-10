@@ -156,10 +156,10 @@ mod app {
 
             log::info!("Connected!");
 
-            let mut counter = 0;
+            let mut counter = 250;
             while ble.connected().await.unwrap() {
-                ble.uart_tx(&[counter]).await.unwrap();
-                counter += 1;
+                ble.uart_tx(&[0xab, counter, 0xcd]).await.unwrap();
+                counter = counter.wrapping_add(1);
                 Mono::delay(1.secs_at_least()).await;
             }
         }
