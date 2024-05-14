@@ -79,7 +79,7 @@ impl<const N: u8> ImxrtSdepSpi<N> {
 impl<const N: u8> crate::SpiBus for ImxrtSdepSpi<N> {
     type Error = crate::Infallible;
 
-    fn transmit(&mut self, mut data: &[u8]) -> Result<(), Self::Error> {
+    fn transmit(&mut self, mut data: &[u8]) -> Result<u8, Self::Error> {
         while self.busy() {}
 
         // Reset FIFOS
@@ -87,10 +87,10 @@ impl<const N: u8> crate::SpiBus for ImxrtSdepSpi<N> {
 
         // log::debug!("Sdep data: {:02x?}", data);
 
-        ral::write_reg!(ral::lpspi, self.lpspi, SR, TCF: TCF_1);
+        ral::write_reg!(ral::lpspi, self.lpspi, SR, TCF: TCF_1, FCF: FCF_1);
 
         let framesz = (data.len() * 8 - 1) as u32;
-        ral::write_reg!(ral::lpspi, self.lpspi, TCR, RXMSK: RXMSK_1, FRAMESZ: framesz);
+        ral::write_reg!(ral::lpspi, self.lpspi, TCR, RXMSK: RXMSK_0, FRAMESZ: framesz);
 
         while !data.is_empty() {
             let mut word = 0;
@@ -106,8 +106,10 @@ impl<const N: u8> crate::SpiBus for ImxrtSdepSpi<N> {
         }
 
         while ral::read_reg!(ral::lpspi, self.lpspi, SR, TCF != TCF_1) {}
+        while ral::read_reg!(ral::lpspi, self.lpspi, SR, FCF != FCF_1) {}
+        let response = ral::read_reg!(ral::lpspi, self.lpspi, RDR).to_be_bytes()[0];
 
-        Ok(())
+        Ok(response)
     }
 
     fn receive(&mut self, buffer: &mut [u8; 20]) -> Result<(), Self::Error> {
