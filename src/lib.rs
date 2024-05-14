@@ -344,14 +344,73 @@ where
     ///
     /// * `data` - The bytestring to send.
     pub async fn uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
-        let response = self
-            .raw_command(&mut b"AT+BLEUARTTX=".iter().chain(data).chain(b"\r\n").copied())
+        // let response = self
+        //     .raw_command(&mut b"AT+BLEUARTTX=".iter().chain(data).chain(b"\r\n").copied())
+        //     .await?;
+        // if response == b"OK\r\n" {
+        //     Ok(())
+        // } else {
+        //     Err(Error::NotOk)
+        // }
+
+        // Send data
+        self.sdep
+            .write(
+                sdep::Message::Command {
+                    id: sdep::CommandType::BleUartTx.into(),
+                    payload: data,
+                    more_data: false,
+                },
+                &mut self.delay,
+            )
             .await?;
-        if response == b"OK\r\n" {
-            Ok(())
-        } else {
-            Err(Error::NotOk)
+
+        // Wait for response
+        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
+        while !self.irq.is_high().unwrap() {
+            if timeout_left == 0 {
+                return Err(Error::Timeout);
+            }
+
+            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
+            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
         }
+
+        // Read response
+        loop {
+            if !self.irq.is_high().unwrap() {
+                return Err(Error::ResponsePayloadIncomplete);
+            }
+
+            match self.sdep.read(&mut self.delay).await {
+                Ok(msg) => match msg {
+                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
+                    sdep::Message::Response {
+                        id,
+                        payload,
+                        more_data,
+                    } => {
+                        if id != sdep::CommandType::BleUartTx.into()
+                            || !payload.is_empty()
+                            || more_data
+                        {
+                            return Err(Error::ResponseInvalid);
+                        }
+                        break;
+                    }
+                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
+                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
+                },
+                Err(Error::Sdep {
+                    source: sdep::Error::DeviceNotReady,
+                }) => {
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -148,6 +148,9 @@ mod app {
         // Change advertised name
         ble.command(b"AT+GAPDEVNAME=Rust meets BLE").await.unwrap();
 
+        // Set LED to blink on BLE UART traffic
+        ble.command(b"AT+HWMODELED=BLEUART").await.unwrap();
+
         loop {
             while !ble.connected().await.unwrap() {
                 log::info!("Waiting for connection ...");
