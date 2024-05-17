@@ -86,7 +86,6 @@ where
         loop {
             self.cs.set_low().unwrap();
             delay.delay_us(delays::CS_TO_SCK_US).await;
-
             let result = self.spi.transmit(data);
             self.cs.set_high().unwrap();
 
@@ -124,10 +123,10 @@ where
         &mut self,
         delay: &mut DELAY,
     ) -> Result<sdep::Message, Error<SPI::Error>> {
+        let buffer = &mut self.buffer;
+
         self.cs.set_low().unwrap();
         delay.delay_us(delays::CS_TO_SCK_US).await;
-
-        let buffer = &mut self.buffer;
         let spi_result = self.spi.receive(buffer);
         self.cs.set_high().unwrap();
 
