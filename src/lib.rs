@@ -420,9 +420,10 @@ where
                     .parse()
                     .map_err(|_| Error::ResponseInvalid)?
             };
+
             while !finished && tx_fifo_space > 0 {
                 let mut chunk_size = 0;
-                for el in chunk_buffer.iter_mut() {
+                for el in chunk_buffer.iter_mut().take(tx_fifo_space) {
                     if let Some(next_data) = data.next() {
                         *el = next_data;
                         chunk_size += 1;
