@@ -51,13 +51,16 @@ pub trait SpiBus {
     /// # Arguments
     ///
     /// * `buffer` - The buffer the data should be read into.
-    fn receive(&mut self, buffer: &mut [u8; 20]) -> Result<(), Self::Error>;
+    fn receive(
+        &mut self,
+        buffer: &mut [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
+    ) -> Result<(), Self::Error>;
 }
 
 struct SdepDriver<SPI, CS> {
     spi: SPI,
     cs: CS,
-    buffer: [u8; 20],
+    buffer: [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
 }
 
 /// Driver for Adafruit Bluefruit LE SPI Friend.
@@ -184,7 +187,7 @@ where
             sdep: SdepDriver {
                 spi,
                 cs,
-                buffer: [0u8; 20],
+                buffer: [0u8; sdep::SDEP_MAX_MESSAGE_SIZE],
             },
             _reset: reset,
             irq,
@@ -243,8 +246,8 @@ where
 
         // Send Command
         while !data.is_empty() {
-            let more_data = data.len() > 16;
-            let payload_len = data.len().min(16);
+            let more_data = data.len() > sdep::SDEP_MAX_PAYLOAD_SIZE;
+            let payload_len = data.len().min(sdep::SDEP_MAX_PAYLOAD_SIZE);
             let (payload, leftover) = data.split_at(payload_len);
             data = leftover;
 

@@ -19,6 +19,8 @@
 use imxrt_iomuxc as iomuxc;
 use imxrt_ral as ral;
 
+use crate::sdep::SDEP_MAX_MESSAGE_SIZE;
+
 /// An SDEP SPI driver for i.MX RT.
 #[cfg_attr(docsrs, doc(cfg(feature = "imxrt")))]
 pub struct ImxrtSdepSpi<const N: u8> {
@@ -112,7 +114,7 @@ impl<const N: u8> crate::SpiBus for ImxrtSdepSpi<N> {
         Ok(response)
     }
 
-    fn receive(&mut self, buffer: &mut [u8; 20]) -> Result<(), Self::Error> {
+    fn receive(&mut self, buffer: &mut [u8; SDEP_MAX_MESSAGE_SIZE]) -> Result<(), Self::Error> {
         let mut buffer = buffer.as_mut_slice();
 
         while self.busy() {}
