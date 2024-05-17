@@ -316,41 +316,7 @@ where
         Ok(&data[..data_size])
     }
 
-    /// Send a fully formed bytestring AT command, and check
-    /// whether we got an `OK` back.
-    ///
-    /// # Returns
-    ///
-    /// The response payload, if there is any.
-    pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
-        let msg = self
-            .raw_command(&mut command.iter().chain(b"\n").copied())
-            .await?;
-        msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
-    }
-
-    /// Whether the Bluefruit module is connected to the central
-    pub async fn connected(&mut self) -> Result<bool, Error<SPI::Error>> {
-        self.command(b"AT+GAPGETCONN")
-            .await
-            .map(|val| val == b"1\r\n")
-    }
-
-    /// Sends the specific bytestring out over BLE UART.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The bytestring to send.
-    pub async fn uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
-        // let response = self
-        //     .raw_command(&mut b"AT+BLEUARTTX=".iter().chain(data).chain(b"\r\n").copied())
-        //     .await?;
-        // if response == b"OK\r\n" {
-        //     Ok(())
-        // } else {
-        //     Err(Error::NotOk)
-        // }
-
+    async fn raw_uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
         // Send data
         self.sdep
             .write(
@@ -405,6 +371,71 @@ where
                     continue;
                 }
                 Err(e) => return Err(e),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Send a fully formed bytestring AT command, and check
+    /// whether we got an `OK` back.
+    ///
+    /// # Returns
+    ///
+    /// The response payload, if there is any.
+    pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
+        let msg = self
+            .raw_command(&mut command.iter().chain(b"\n").copied())
+            .await?;
+        msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
+    }
+
+    /// Whether the Bluefruit module is connected to the central
+    pub async fn connected(&mut self) -> Result<bool, Error<SPI::Error>> {
+        self.command(b"AT+GAPGETCONN")
+            .await
+            .map(|val| val == b"1\r\n")
+    }
+
+    /// Sends the specific bytestring out over BLE UART.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The bytestring to send.
+    pub async fn uart_tx(
+        &mut self,
+        data: impl IntoIterator<Item = u8>,
+    ) -> Result<(), Error<SPI::Error>> {
+        let mut chunk_buffer = [0u8; sdep::SDEP_MAX_PAYLOAD_SIZE];
+
+        let mut data = data.into_iter();
+
+        let mut finished = false;
+        while !finished {
+            let mut tx_fifo_space: usize = {
+                let response = self.command(b"AT+BLEUARTFIFO=TX").await?;
+                core::str::from_utf8(response)
+                    .map_err(|_| Error::ResponseInvalid)?
+                    .trim_end()
+                    .parse()
+                    .map_err(|_| Error::ResponseInvalid)?
+            };
+            while !finished && tx_fifo_space > 0 {
+                let mut chunk_size = 0;
+                for el in chunk_buffer.iter_mut() {
+                    if let Some(next_data) = data.next() {
+                        *el = next_data;
+                        chunk_size += 1;
+                    } else {
+                        finished = true;
+                        break;
+                    }
+                }
+
+                if chunk_size > 0 {
+                    self.raw_uart_tx(&chunk_buffer[..chunk_size]).await?;
+                    tx_fifo_space -= chunk_size;
+                }
             }
         }
 

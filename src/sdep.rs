@@ -3,6 +3,11 @@
 use snafu::prelude::*;
 use strum::FromRepr;
 
+/// The maximum size of an SDEP payload.
+///
+/// See https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport.
+pub const SDEP_MAX_PAYLOAD_SIZE: usize = 16;
+
 /// The `id` field of a [`Message::Command`] or [`Message::Response`].
 ///
 /// Note that this list is not exhaustive,

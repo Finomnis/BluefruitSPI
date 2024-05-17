@@ -161,7 +161,16 @@ mod app {
 
             let mut counter = 250;
             while ble.connected().await.unwrap() {
-                ble.uart_tx(&[0xab, counter, 0xcd]).await.unwrap();
+                if let Err(e) = ble
+                    .uart_tx(
+                        core::iter::once(counter)
+                            .chain(0..100)
+                            .chain(core::iter::once(counter)),
+                    )
+                    .await
+                {
+                    log::error!("Uart TX failed: {}", e);
+                }
                 counter = counter.wrapping_add(1);
                 Mono::delay(1.secs_at_least()).await;
             }
