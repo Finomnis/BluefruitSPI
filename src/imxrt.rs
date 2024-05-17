@@ -90,7 +90,7 @@ impl<const N: u8> crate::SpiBus for ImxrtSdepSpi<N> {
         ral::write_reg!(ral::lpspi, self.lpspi, SR, TCF: TCF_1, FCF: FCF_1);
 
         let framesz = (data.len() * 8 - 1) as u32;
-        ral::write_reg!(ral::lpspi, self.lpspi, TCR, RXMSK: RXMSK_0, FRAMESZ: framesz);
+        ral::write_reg!(ral::lpspi, self.lpspi, TCR, FRAMESZ: framesz);
 
         while !data.is_empty() {
             let mut word = 0;
