@@ -38,7 +38,11 @@ pub trait SpiBus {
     /// # Arguments
     ///
     /// * `data` - The data to be sent to the bus. Guaranteed to be 20 bytes or less.
-    fn transmit(&mut self, data: &[u8]) -> Result<(), Self::Error>;
+    ///
+    /// # Return
+    ///
+    /// The first byte of the received data, which contains the immediate result code.
+    fn transmit(&mut self, data: &[u8]) -> Result<u8, Self::Error>;
 
     /// Reads data from the bus.
     ///
@@ -78,14 +82,31 @@ where
     ) -> Result<(), Error<SPI::Error>> {
         let data = msg.to_bytes(&mut self.buffer);
 
-        self.cs.set_low().unwrap();
-        delay.delay_us(delays::CS_TO_SCK_US).await;
+        let mut iteration = 0;
+        loop {
+            self.cs.set_low().unwrap();
+            delay.delay_us(delays::CS_TO_SCK_US).await;
+            let result = self.spi.transmit(data);
+            self.cs.set_high().unwrap();
 
-        self.spi
-            .transmit(data)
-            .map_err(|source| Error::SpiBus { source })?;
+            let write_response = result.map_err(|source| Error::SpiBus { source })?;
+            match sdep::MessageType::from_repr(write_response) {
+                Some(sdep::MessageType::DeviceReadOverflow) => break,
+                Some(sdep::MessageType::DeviceNotReady) => Ok(()),
+                _ => Err(Error::WriteResponseInvalid {
+                    response: write_response,
+                }),
+            }?;
 
-        self.cs.set_high().unwrap();
+            delay.delay_us(delays::WRITE_RETRY_DELAY_US).await;
+
+            if iteration >= delays::WRITE_RETRY_COUNT {
+                return Err(Error::Sdep {
+                    source: sdep::Error::DeviceNotReady,
+                });
+            }
+            iteration += 1;
+        }
 
         if msg.more_data() {
             delay.delay_us(delays::BETWEEN_SDEP_WRITE_US).await;
@@ -101,15 +122,14 @@ where
         &mut self,
         delay: &mut DELAY,
     ) -> Result<sdep::Message, Error<SPI::Error>> {
+        let buffer = &mut self.buffer;
+
         self.cs.set_low().unwrap();
         delay.delay_us(delays::CS_TO_SCK_US).await;
-
-        let buffer = &mut self.buffer;
-        self.spi
-            .receive(buffer)
-            .map_err(|source| Error::SpiBus { source })?;
-
+        let spi_result = self.spi.receive(buffer);
         self.cs.set_high().unwrap();
+
+        spi_result.map_err(|source| Error::SpiBus { source })?;
 
         let result = sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source });
 
@@ -354,6 +374,11 @@ pub enum Error<SpiError: snafu::AsErrorSource> {
     ResponsePayloadIncomplete,
     /// The device answered with an invalid response.
     ResponseInvalid,
+    /// The device answered with an invalid response.
+    WriteResponseInvalid {
+        /// The value of the write response
+        response: u8,
+    },
     /// The device answered with an error code.
     ErrorResponse {
         /// The error id.
