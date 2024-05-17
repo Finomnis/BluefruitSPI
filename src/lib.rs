@@ -98,15 +98,14 @@ where
                 }),
             }?;
 
-            log::warn!("Write retry!");
             delay.delay_us(delays::WRITE_RETRY_DELAY_US).await;
 
-            iteration += 1;
             if iteration >= delays::WRITE_RETRY_COUNT {
                 return Err(Error::Sdep {
                     source: sdep::Error::DeviceNotReady,
                 });
             }
+            iteration += 1;
         }
 
         if msg.more_data() {
