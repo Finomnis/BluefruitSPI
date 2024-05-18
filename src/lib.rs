@@ -177,18 +177,23 @@ where
         &mut self,
         data: impl IntoIterator<Item = u8>,
     ) -> Result<(), Error<SPI::Error>> {
+        /// Completely heuristic ...
+        /// Seems to break at somewhere around ~300, so let's be safe and choose a smaller value
+        const UART_TX_MAX_BURST_SIZE: usize = 128;
+
         let mut data = data.into_iter().peekable();
 
         let mut finished = false;
         while !finished {
-            let tx_fifo_space: usize = {
+            let tx_fifo_space = {
                 let response = self.command(b"AT+BLEUARTFIFO=TX").await?;
                 core::str::from_utf8(response)
                     .map_err(|_| Error::ResponseInvalid)?
                     .trim_end()
-                    .parse()
+                    .parse::<usize>()
                     .map_err(|_| Error::ResponseInvalid)?
-            };
+            }
+            .min(UART_TX_MAX_BURST_SIZE);
 
             if tx_fifo_space == 0 {
                 continue;
