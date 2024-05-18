@@ -60,9 +60,8 @@ pub trait SpiBus {
 
 /// Driver for Adafruit Bluefruit LE SPI Friend.
 pub struct BluefruitSPI<SPI, CS, RST, IRQ, DELAY> {
-    sdep: sdep_driver::SdepDriver<SPI, CS>,
+    sdep: sdep_driver::SdepDriver<IRQ, SPI, CS>,
     _reset: RST,
-    irq: IRQ,
     delay: DELAY,
     command_buffer: [u8; 256],
 }
@@ -72,7 +71,7 @@ where
     SPI: SpiBus,
     CS: embedded_hal::digital::OutputPin,
     RST: embedded_hal::digital::OutputPin,
-    IRQ: embedded_hal::digital::InputPin, //TODO: use interrupts + embedded_hal_async::digital::Wait,
+    IRQ: embedded_hal::digital::InputPin,
     DELAY: embedded_hal_async::delay::DelayNs,
 {
     /// Create a new instance of this driver.
@@ -93,9 +92,8 @@ where
         cassette::block_on(delay.delay_ms(delays::AFTER_RESET_MS));
 
         Self {
-            sdep: sdep_driver::SdepDriver::new(spi, cs),
+            sdep: sdep_driver::SdepDriver::new(irq, spi, cs),
             _reset: reset,
-            irq,
             delay,
             command_buffer: [0u8; 256],
         }
@@ -125,146 +123,29 @@ where
         &mut self,
         data_iter: &mut dyn Iterator<Item = u8>,
     ) -> Result<&[u8], Error<SPI::Error>> {
-        // Prepare data
-        let mut data = {
-            let mut data_size = 0;
-            let data = &mut self.command_buffer[..127];
-
-            for elem in data.iter_mut() {
-                match data_iter.next() {
-                    Some(val) => {
-                        *elem = val;
-                        data_size += 1;
-                    }
-                    None => {
-                        break;
-                    }
-                }
-            }
-
-            if data_iter.next().is_some() {
-                return Err(Error::CommandPayloadTooLong);
-            }
-
-            &data[..data_size]
-        };
-
-        // Send Command
-        while !data.is_empty() {
-            let more_data = data.len() > sdep::SDEP_MAX_PAYLOAD_SIZE;
-            let payload_len = data.len().min(sdep::SDEP_MAX_PAYLOAD_SIZE);
-            let (payload, leftover) = data.split_at(payload_len);
-            data = leftover;
-
-            self.sdep
-                .write(
-                    sdep::Message::Command {
-                        id: sdep::CommandType::AtWrapper.into(),
-                        payload,
-                        more_data,
-                    },
-                    &mut self.delay,
-                )
-                .await?;
-        }
-
-        // Wait for response
-        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
-        while !self.irq.is_high().unwrap() {
-            if timeout_left == 0 {
-                return Err(Error::Timeout);
-            }
-
-            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
-            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
-        }
-
-        // Read response
-        let data = &mut self.command_buffer;
-        let mut data_size = 0;
-
-        loop {
-            if !self.irq.is_high().unwrap() {
-                return Err(Error::ResponsePayloadIncomplete);
-            }
-
-            match self.sdep.read(&mut self.delay).await? {
-                sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
-                sdep::Message::Response {
-                    id,
-                    payload,
-                    more_data,
-                } => {
-                    if id != sdep::CommandType::AtWrapper.into() {
-                        return Err(Error::ResponseInvalid);
-                    }
-                    for word in payload {
-                        *data
-                            .get_mut(data_size)
-                            .ok_or(Error::ResponsePayloadTooLong)? = *word;
-                        data_size += 1;
-                    }
-                    if !more_data {
-                        break;
-                    }
-                }
-                sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
-                sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
-            }
-        }
-
-        Ok(&data[..data_size])
-    }
-
-    async fn raw_uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
-        // Send data
         self.sdep
-            .write(
-                sdep::Message::Command {
-                    id: sdep::CommandType::BleUartTx.into(),
-                    payload: data,
-                    more_data: false,
-                },
+            .execute_command(
+                sdep::CommandType::AtWrapper,
+                data_iter,
+                &mut self.command_buffer,
                 &mut self.delay,
             )
-            .await?;
+            .await
+    }
 
-        // Wait for response
-        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
-        while !self.irq.is_high().unwrap() {
-            if timeout_left == 0 {
-                return Err(Error::Timeout);
-            }
-
-            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
-            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
-        }
-
-        // Read response
-        loop {
-            if !self.irq.is_high().unwrap() {
-                return Err(Error::ResponsePayloadIncomplete);
-            }
-
-            match self.sdep.read(&mut self.delay).await? {
-                sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
-                sdep::Message::Response {
-                    id,
-                    payload,
-                    more_data,
-                } => {
-                    if id != sdep::CommandType::BleUartTx.into() || !payload.is_empty() || more_data
-                    {
-                        return Err(Error::ResponseInvalid);
-                    }
-                    break;
-                }
-                sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
-                sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
-            }
-        }
-
-        Ok(())
+    async fn raw_uart_tx(
+        &mut self,
+        data_iter: &mut dyn Iterator<Item = u8>,
+    ) -> Result<(), Error<SPI::Error>> {
+        self.sdep
+            .execute_command(
+                sdep::CommandType::BleUartTx,
+                data_iter,
+                &mut [],
+                &mut self.delay,
+            )
+            .await
+            .map(|_| ())
     }
 
     /// Send a fully formed bytestring AT command, and check
@@ -324,7 +205,8 @@ where
                 }
 
                 if chunk_size > 0 {
-                    self.raw_uart_tx(&chunk_buffer[..chunk_size]).await?;
+                    self.raw_uart_tx(&mut chunk_buffer[..chunk_size].iter().cloned())
+                        .await?;
                     tx_fifo_space -= chunk_size;
                 }
             }

@@ -5,21 +5,108 @@ struct SdepRawDriver<SPI, CS> {
     cs: CS,
 }
 
-pub struct SdepDriver<SPI, CS> {
+pub struct SdepDriver<IRQ, SPI, CS> {
     raw: SdepRawDriver<SPI, CS>,
+    irq: IRQ,
     buffer: [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
 }
 
-impl<SPI, CS> SdepDriver<SPI, CS>
+impl<IRQ, SPI, CS> SdepDriver<IRQ, SPI, CS>
 where
+    IRQ: embedded_hal::digital::InputPin, //TODO: use interrupts + embedded_hal_async::digital::Wait,
     SPI: SpiBus,
     CS: embedded_hal::digital::OutputPin,
 {
-    pub fn new(spi: SPI, cs: CS) -> Self {
+    pub fn new(irq: IRQ, spi: SPI, cs: CS) -> Self {
         Self {
             raw: SdepRawDriver { spi, cs },
+            irq,
             buffer: [0u8; sdep::SDEP_MAX_MESSAGE_SIZE],
         }
+    }
+
+    pub async fn execute_command<'a, DELAY: embedded_hal_async::delay::DelayNs>(
+        &mut self,
+        command_type: sdep::CommandType,
+        data_iter: &mut dyn Iterator<Item = u8>,
+        result_buffer: &'a mut [u8],
+        delay: &mut DELAY,
+    ) -> Result<&'a [u8], Error<SPI::Error>> {
+        // Send Command
+        let mut payload = [0u8; sdep::SDEP_MAX_PAYLOAD_SIZE];
+        let mut data = data_iter.peekable();
+        let mut send_finished = false;
+        while !send_finished {
+            let mut payload_size = 0;
+            for el in payload.iter_mut() {
+                if let Some(d) = data.next() {
+                    *el = d;
+                    payload_size += 1;
+                } else {
+                    send_finished = true;
+                    break;
+                }
+            }
+
+            send_finished = send_finished || data.peek().is_none();
+
+            self.write(
+                sdep::Message::Command {
+                    id: command_type.into(),
+                    payload: &payload[..payload_size],
+                    more_data: !send_finished,
+                },
+                delay,
+            )
+            .await?;
+        }
+
+        // Wait for response
+        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
+        while !self.irq.is_high().unwrap() {
+            if timeout_left == 0 {
+                return Err(Error::Timeout);
+            }
+
+            delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
+            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
+        }
+
+        // Read response
+        let data = result_buffer;
+        let mut data_size = 0;
+
+        loop {
+            if !self.irq.is_high().unwrap() {
+                return Err(Error::ResponsePayloadIncomplete);
+            }
+
+            match self.read(delay).await? {
+                sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
+                sdep::Message::Response {
+                    id,
+                    payload,
+                    more_data,
+                } => {
+                    if id != command_type.into() {
+                        return Err(Error::ResponseInvalid);
+                    }
+                    for word in payload {
+                        *data
+                            .get_mut(data_size)
+                            .ok_or(Error::ResponsePayloadTooLong)? = *word;
+                        data_size += 1;
+                    }
+                    if !more_data {
+                        break;
+                    }
+                }
+                sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
+                sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
+            }
+        }
+
+        Ok(&data[..data_size])
     }
 
     /// Write a raw SDEP message to the device.
@@ -46,7 +133,7 @@ where
     }
 
     /// Read a raw SDEP message from the device.
-    pub async fn read<DELAY: embedded_hal_async::delay::DelayNs>(
+    async fn read<DELAY: embedded_hal_async::delay::DelayNs>(
         &mut self,
         delay: &mut DELAY,
     ) -> Result<sdep::Message, Error<SPI::Error>> {
