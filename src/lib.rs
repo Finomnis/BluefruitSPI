@@ -10,6 +10,7 @@ use snafu::prelude::*;
 
 mod delays;
 pub mod sdep;
+mod sdep_driver;
 
 #[cfg(feature = "imxrt")]
 #[cfg_attr(docsrs, doc(cfg(feature = "imxrt")))]
@@ -57,105 +58,13 @@ pub trait SpiBus {
     ) -> Result<(), Self::Error>;
 }
 
-struct SdepDriver<SPI, CS> {
-    spi: SPI,
-    cs: CS,
-    buffer: [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
-}
-
 /// Driver for Adafruit Bluefruit LE SPI Friend.
 pub struct BluefruitSPI<SPI, CS, RST, IRQ, DELAY> {
-    sdep: SdepDriver<SPI, CS>,
+    sdep: sdep_driver::SdepDriver<SPI, CS>,
     _reset: RST,
     irq: IRQ,
     delay: DELAY,
     command_buffer: [u8; 256],
-}
-
-impl<SPI, CS> SdepDriver<SPI, CS>
-where
-    SPI: SpiBus,
-    CS: embedded_hal::digital::OutputPin,
-{
-    /// Write a raw SDEP message to the device
-    async fn write<'a, DELAY: embedded_hal_async::delay::DelayNs>(
-        &mut self,
-        msg: sdep::Message<'a>,
-        delay: &mut DELAY,
-    ) -> Result<(), Error<SPI::Error>> {
-        let data = msg.to_bytes(&mut self.buffer);
-
-        let mut iteration = 0;
-        loop {
-            self.cs.set_low().unwrap();
-            delay.delay_us(delays::CS_TO_SCK_US).await;
-            let result = self.spi.transmit(data);
-            self.cs.set_high().unwrap();
-
-            let write_response = result.map_err(|source| Error::SpiBus { source })?;
-            match sdep::MessageType::from_repr(write_response) {
-                Some(sdep::MessageType::DeviceReadOverflow) => break,
-                Some(sdep::MessageType::DeviceNotReady) => Ok(()),
-                _ => Err(Error::WriteResponseInvalid {
-                    response: write_response,
-                }),
-            }?;
-
-            delay.delay_us(delays::WRITE_RETRY_DELAY_US).await;
-
-            if iteration >= delays::WRITE_RETRY_COUNT {
-                return Err(Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                });
-            }
-            iteration += 1;
-        }
-
-        if msg.more_data() {
-            delay.delay_us(delays::BETWEEN_SDEP_WRITE_US).await;
-        } else {
-            delay.delay_us(delays::AFTER_SDEP_WRITE_US).await;
-        }
-
-        Ok(())
-    }
-
-    /// Write a raw SDEP message to the device
-    async fn read<DELAY: embedded_hal_async::delay::DelayNs>(
-        &mut self,
-        delay: &mut DELAY,
-    ) -> Result<sdep::Message, Error<SPI::Error>> {
-        let buffer = &mut self.buffer;
-
-        self.cs.set_low().unwrap();
-        delay.delay_us(delays::CS_TO_SCK_US).await;
-        let spi_result = self.spi.receive(buffer);
-        self.cs.set_high().unwrap();
-
-        spi_result.map_err(|source| Error::SpiBus { source })?;
-
-        let result = sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source });
-
-        let delay_us = match &result {
-            Ok(msg) => {
-                if msg.more_data() {
-                    delays::BETWEEN_SDEP_READ_US
-                } else {
-                    delays::AFTER_SDEP_READ_US
-                }
-            }
-            Err(e) => match e {
-                Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                } => delays::BETWEEN_SDEP_READ_US,
-                _ => delays::AFTER_SDEP_READ_US,
-            },
-        };
-
-        delay.delay_us(delay_us).await;
-
-        result
-    }
 }
 
 impl<SPI, CS, RST, IRQ, DELAY> BluefruitSPI<SPI, CS, RST, IRQ, DELAY>
@@ -184,11 +93,7 @@ where
         cassette::block_on(delay.delay_ms(delays::AFTER_RESET_MS));
 
         Self {
-            sdep: SdepDriver {
-                spi,
-                cs,
-                buffer: [0u8; sdep::SDEP_MAX_MESSAGE_SIZE],
-            },
+            sdep: sdep_driver::SdepDriver::new(spi, cs),
             _reset: reset,
             irq,
             delay,
