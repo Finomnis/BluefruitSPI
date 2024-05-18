@@ -177,13 +177,11 @@ where
         &mut self,
         data: impl IntoIterator<Item = u8>,
     ) -> Result<(), Error<SPI::Error>> {
-        let mut chunk_buffer = [0u8; sdep::SDEP_MAX_PAYLOAD_SIZE];
-
-        let mut data = data.into_iter();
+        let mut data = data.into_iter().peekable();
 
         let mut finished = false;
         while !finished {
-            let mut tx_fifo_space: usize = {
+            let tx_fifo_space: usize = {
                 let response = self.command(b"AT+BLEUARTFIFO=TX").await?;
                 core::str::from_utf8(response)
                     .map_err(|_| Error::ResponseInvalid)?
@@ -192,23 +190,22 @@ where
                     .map_err(|_| Error::ResponseInvalid)?
             };
 
-            while !finished && tx_fifo_space > 0 {
-                let mut chunk_size = 0;
-                for el in chunk_buffer.iter_mut().take(tx_fifo_space) {
-                    if let Some(next_data) = data.next() {
-                        *el = next_data;
-                        chunk_size += 1;
-                    } else {
-                        finished = true;
-                        break;
-                    }
-                }
+            if tx_fifo_space == 0 {
+                continue;
+            }
 
-                if chunk_size > 0 {
-                    self.raw_uart_tx(&mut chunk_buffer[..chunk_size].iter().cloned())
-                        .await?;
-                    tx_fifo_space -= chunk_size;
-                }
+            let mut num_transmitted = 0;
+            if data.peek().is_some() {
+                self.raw_uart_tx(
+                    &mut (&mut data)
+                        .take(tx_fifo_space)
+                        .inspect(|_| num_transmitted += 1),
+                )
+                .await?;
+            }
+
+            if num_transmitted < tx_fifo_space {
+                finished = true;
             }
         }
 
