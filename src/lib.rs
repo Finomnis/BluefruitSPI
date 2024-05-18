@@ -51,13 +51,16 @@ pub trait SpiBus {
     /// # Arguments
     ///
     /// * `buffer` - The buffer the data should be read into.
-    fn receive(&mut self, buffer: &mut [u8; 20]) -> Result<(), Self::Error>;
+    fn receive(
+        &mut self,
+        buffer: &mut [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
+    ) -> Result<(), Self::Error>;
 }
 
 struct SdepDriver<SPI, CS> {
     spi: SPI,
     cs: CS,
-    buffer: [u8; 20],
+    buffer: [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
 }
 
 /// Driver for Adafruit Bluefruit LE SPI Friend.
@@ -184,7 +187,7 @@ where
             sdep: SdepDriver {
                 spi,
                 cs,
-                buffer: [0u8; 20],
+                buffer: [0u8; sdep::SDEP_MAX_MESSAGE_SIZE],
             },
             _reset: reset,
             irq,
@@ -243,8 +246,8 @@ where
 
         // Send Command
         while !data.is_empty() {
-            let more_data = data.len() > 16;
-            let payload_len = data.len().min(16);
+            let more_data = data.len() > sdep::SDEP_MAX_PAYLOAD_SIZE;
+            let payload_len = data.len().min(sdep::SDEP_MAX_PAYLOAD_SIZE);
             let (payload, leftover) = data.split_at(payload_len);
             data = leftover;
 
@@ -316,6 +319,67 @@ where
         Ok(&data[..data_size])
     }
 
+    async fn raw_uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
+        // Send data
+        self.sdep
+            .write(
+                sdep::Message::Command {
+                    id: sdep::CommandType::BleUartTx.into(),
+                    payload: data,
+                    more_data: false,
+                },
+                &mut self.delay,
+            )
+            .await?;
+
+        // Wait for response
+        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
+        while !self.irq.is_high().unwrap() {
+            if timeout_left == 0 {
+                return Err(Error::Timeout);
+            }
+
+            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
+            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
+        }
+
+        // Read response
+        loop {
+            if !self.irq.is_high().unwrap() {
+                return Err(Error::ResponsePayloadIncomplete);
+            }
+
+            match self.sdep.read(&mut self.delay).await {
+                Ok(msg) => match msg {
+                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
+                    sdep::Message::Response {
+                        id,
+                        payload,
+                        more_data,
+                    } => {
+                        if id != sdep::CommandType::BleUartTx.into()
+                            || !payload.is_empty()
+                            || more_data
+                        {
+                            return Err(Error::ResponseInvalid);
+                        }
+                        break;
+                    }
+                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
+                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
+                },
+                Err(Error::Sdep {
+                    source: sdep::Error::DeviceNotReady,
+                }) => {
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(())
+    }
+
     /// Send a fully formed bytestring AT command, and check
     /// whether we got an `OK` back.
     ///
@@ -341,15 +405,45 @@ where
     /// # Arguments
     ///
     /// * `data` - The bytestring to send.
-    pub async fn uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
-        let response = self
-            .raw_command(&mut b"AT+BLEUARTTX=".iter().chain(data).chain(b"\r\n").copied())
-            .await?;
-        if response == b"OK\r\n" {
-            Ok(())
-        } else {
-            Err(Error::NotOk)
+    pub async fn uart_tx(
+        &mut self,
+        data: impl IntoIterator<Item = u8>,
+    ) -> Result<(), Error<SPI::Error>> {
+        let mut chunk_buffer = [0u8; sdep::SDEP_MAX_PAYLOAD_SIZE];
+
+        let mut data = data.into_iter();
+
+        let mut finished = false;
+        while !finished {
+            let mut tx_fifo_space: usize = {
+                let response = self.command(b"AT+BLEUARTFIFO=TX").await?;
+                core::str::from_utf8(response)
+                    .map_err(|_| Error::ResponseInvalid)?
+                    .trim_end()
+                    .parse()
+                    .map_err(|_| Error::ResponseInvalid)?
+            };
+
+            while !finished && tx_fifo_space > 0 {
+                let mut chunk_size = 0;
+                for el in chunk_buffer.iter_mut().take(tx_fifo_space) {
+                    if let Some(next_data) = data.next() {
+                        *el = next_data;
+                        chunk_size += 1;
+                    } else {
+                        finished = true;
+                        break;
+                    }
+                }
+
+                if chunk_size > 0 {
+                    self.raw_uart_tx(&chunk_buffer[..chunk_size]).await?;
+                    tx_fifo_space -= chunk_size;
+                }
+            }
         }
+
+        Ok(())
     }
 }
 

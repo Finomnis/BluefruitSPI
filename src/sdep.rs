@@ -3,6 +3,16 @@
 use snafu::prelude::*;
 use strum::FromRepr;
 
+/// The maximum size of an SDEP payload.
+///
+/// See https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport.
+pub const SDEP_MAX_PAYLOAD_SIZE: usize = 16;
+
+/// The maximum size of an SDEP message.
+///
+/// See https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport.
+pub const SDEP_MAX_MESSAGE_SIZE: usize = SDEP_MAX_PAYLOAD_SIZE + 4;
+
 /// The `id` field of a [`Message::Command`] or [`Message::Response`].
 ///
 /// Note that this list is not exhaustive,
@@ -145,16 +155,16 @@ impl<'a> Message<'a> {
     /// # Returns
     ///
     /// A slice to the part of the buffer that contains the serialized message.
-    pub fn to_bytes<'b>(&self, buffer: &'b mut [u8; 20]) -> &'b [u8] {
+    pub fn to_bytes<'b>(&self, buffer: &'b mut [u8; SDEP_MAX_MESSAGE_SIZE]) -> &'b [u8] {
         fn fill_data<'c>(
-            buffer: &'c mut [u8; 20],
+            buffer: &'c mut [u8; SDEP_MAX_MESSAGE_SIZE],
             message_type: MessageType,
             id: u16,
             payload: &[u8],
             more_data: bool,
         ) -> &'c [u8] {
             let payload_size = payload.len();
-            assert!(payload_size <= 16);
+            assert!(payload_size <= SDEP_MAX_PAYLOAD_SIZE);
 
             let id_bytes: [u8; 2] = id.to_le_bytes();
 
@@ -190,7 +200,7 @@ impl<'a> Message<'a> {
     }
 
     /// Deserializes a message from a byte buffer.
-    pub fn from_bytes(data: &'a [u8; 20]) -> Result<Self, Error> {
+    pub fn from_bytes(data: &'a [u8; SDEP_MAX_MESSAGE_SIZE]) -> Result<Self, Error> {
         let header_type = data[0];
         let header_id = u16::from_le_bytes([data[1], data[2]]);
         let header_payload_info = data[3];
