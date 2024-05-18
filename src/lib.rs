@@ -188,36 +188,28 @@ where
                 return Err(Error::ResponsePayloadIncomplete);
             }
 
-            match self.sdep.read(&mut self.delay).await {
-                Ok(msg) => match msg {
-                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Response {
-                        id,
-                        payload,
-                        more_data,
-                    } => {
-                        if id != sdep::CommandType::AtWrapper.into() {
-                            return Err(Error::ResponseInvalid);
-                        }
-                        for word in payload {
-                            *data
-                                .get_mut(data_size)
-                                .ok_or(Error::ResponsePayloadTooLong)? = *word;
-                            data_size += 1;
-                        }
-                        if !more_data {
-                            break;
-                        }
+            match self.sdep.read(&mut self.delay).await? {
+                sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
+                sdep::Message::Response {
+                    id,
+                    payload,
+                    more_data,
+                } => {
+                    if id != sdep::CommandType::AtWrapper.into() {
+                        return Err(Error::ResponseInvalid);
                     }
-                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
-                },
-                Err(Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                }) => {
-                    continue;
+                    for word in payload {
+                        *data
+                            .get_mut(data_size)
+                            .ok_or(Error::ResponsePayloadTooLong)? = *word;
+                        data_size += 1;
+                    }
+                    if !more_data {
+                        break;
+                    }
                 }
-                Err(e) => return Err(e),
+                sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
+                sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
             }
         }
 
@@ -254,31 +246,21 @@ where
                 return Err(Error::ResponsePayloadIncomplete);
             }
 
-            match self.sdep.read(&mut self.delay).await {
-                Ok(msg) => match msg {
-                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Response {
-                        id,
-                        payload,
-                        more_data,
-                    } => {
-                        if id != sdep::CommandType::BleUartTx.into()
-                            || !payload.is_empty()
-                            || more_data
-                        {
-                            return Err(Error::ResponseInvalid);
-                        }
-                        break;
+            match self.sdep.read(&mut self.delay).await? {
+                sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
+                sdep::Message::Response {
+                    id,
+                    payload,
+                    more_data,
+                } => {
+                    if id != sdep::CommandType::BleUartTx.into() || !payload.is_empty() || more_data
+                    {
+                        return Err(Error::ResponseInvalid);
                     }
-                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
-                },
-                Err(Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                }) => {
-                    continue;
+                    break;
                 }
-                Err(e) => return Err(e),
+                sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
+                sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
             }
         }
 
