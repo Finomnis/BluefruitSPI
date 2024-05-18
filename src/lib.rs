@@ -185,32 +185,33 @@ where
 
         let mut finished = false;
         while !finished {
-            let tx_fifo_space = {
+            let mut tx_fifo_space = {
                 let response = self.command(b"AT+BLEUARTFIFO=TX").await?;
                 core::str::from_utf8(response)
                     .map_err(|_| Error::ResponseInvalid)?
                     .trim_end()
                     .parse::<usize>()
                     .map_err(|_| Error::ResponseInvalid)?
-            }
-            .min(UART_TX_MAX_BURST_SIZE);
+            };
 
-            if tx_fifo_space == 0 {
-                continue;
-            }
+            while !finished && tx_fifo_space > 0 {
+                let current_burst = tx_fifo_space.min(UART_TX_MAX_BURST_SIZE);
 
-            let mut num_transmitted = 0;
-            if data.peek().is_some() {
-                self.raw_uart_tx(
-                    &mut (&mut data)
-                        .take(tx_fifo_space)
-                        .inspect(|_| num_transmitted += 1),
-                )
-                .await?;
-            }
+                let mut num_transmitted = 0;
+                if data.peek().is_some() {
+                    self.raw_uart_tx(
+                        &mut (&mut data)
+                            .take(current_burst)
+                            .inspect(|_| num_transmitted += 1),
+                    )
+                    .await?;
+                }
 
-            if num_transmitted < tx_fifo_space {
-                finished = true;
+                tx_fifo_space -= num_transmitted;
+
+                if num_transmitted < current_burst {
+                    finished = true;
+                }
             }
         }
 
