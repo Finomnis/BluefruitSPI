@@ -185,12 +185,12 @@ where
 
         let mut finished = false;
         while !finished {
-            let mut tx_fifo_space = {
+            let mut tx_fifo_space: usize = {
                 let response = self.command(b"AT+BLEUARTFIFO=TX").await?;
                 core::str::from_utf8(response)
                     .map_err(|_| Error::ResponseInvalid)?
                     .trim_end()
-                    .parse::<usize>()
+                    .parse()
                     .map_err(|_| Error::ResponseInvalid)?
             };
 
