@@ -170,7 +170,11 @@ mod app {
                         break;
                     }
 
-                    log::info!("Echoing {} bytes: {:?}", received.len(), received);
+                    if let Ok(s) = core::str::from_utf8(received) {
+                        log::info!("Echoing {} bytes: {:?}", received.len(), s);
+                    } else {
+                        log::info!("Echoing {} bytes: {:?}", received.len(), received);
+                    }
 
                     ble.uart_tx(received.iter().cloned()).await?;
                 }
