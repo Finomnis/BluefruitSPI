@@ -130,24 +130,34 @@ where
         result
     }
 
-    /// Send a fully formed bytestring AT command, and check
-    /// whether we got an `OK` back.
-    ///
-    /// # Returns
-    ///
-    /// The response payload, if there is any.
-    pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
+    async fn raw_command(
+        &mut self,
+        command: &mut dyn Iterator<Item = &u8>,
+    ) -> Result<&[u8], Error<SPI::Error>> {
         let msg = self
             .sdep
             .execute_command(
                 sdep::CommandType::AtWrapper,
-                &mut command.iter().chain(b"\n").copied(),
+                &mut command.chain(b"\n").copied(),
                 &mut self.static_buffer,
                 &mut self.delay,
             )
             .await?;
 
         msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
+    }
+
+    /// Send a fully formed bytestring AT command, and check
+    /// whether we got an `OK` back.
+    ///
+    /// # Returns
+    ///
+    /// The response payload, if there is any.
+    pub async fn command(
+        &mut self,
+        command: impl IntoIterator<Item = &u8>,
+    ) -> Result<&[u8], Error<SPI::Error>> {
+        self.raw_command(&mut command.into_iter()).await
     }
 
     /// Whether the Bluefruit module is connected to the central
