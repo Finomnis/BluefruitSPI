@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[example]]
-name = "teensy4"
+name = "teensy4_echo"
 required-features = ["imxrt"]
 
 [features]

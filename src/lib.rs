@@ -21,14 +21,10 @@ pub const RECOMMENDED_SPI_BITRATE_HZ: u32 = 4_000_000;
 
 /// The size of the static buffer used for communication.
 /// Determined heuristically.
-///
-/// For example, used in Uart RX. It's nowhere specified what the
-/// max size of a UART RX burst is, but it seems to be 64 from experiments.
-///
-/// So far, 256 was enough for everything we used it for.
-/// If firmware changes this at some point, no undefined behavior will happen,
-/// and instead an error will get returned.
 const STATIC_BUFFER_SIZE: usize = 256;
+
+/// The minimum required size for a buffer to be usable for [`BluefruitSPI::uart_rx`].
+pub const UART_RX_MIN_BUFFER_SIZE: usize = 64;
 
 /// SPI Bus the Adafruit Bluefruit LE SPI Friend is attached to.
 ///
@@ -219,12 +215,20 @@ where
     /// Reads available bytes from BLE UART.
     ///
     /// Returns an empty slice if no bytes are available.
-    pub async fn uart_rx(&mut self) -> Result<&[u8], Error<SPI::Error>> {
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The buffer that the data will be read into.
+    ///              The buffer size needs to be at least [`UART_TX_BUFFER_SIZE`] bytes.
+    pub async fn uart_rx<'a>(
+        &mut self,
+        buffer: &'a mut [u8],
+    ) -> Result<&'a [u8], Error<SPI::Error>> {
         self.sdep
             .execute_command(
                 sdep::CommandType::BleUartRx,
                 &mut core::iter::empty(),
-                &mut self.static_buffer,
+                buffer,
                 &mut self.delay,
             )
             .await

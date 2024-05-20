@@ -45,18 +45,20 @@ mod app {
     const LOG_POLL_INTERVAL: u32 = board::PERCLK_FREQUENCY / 100;
     const LOG_DMA_CHANNEL: usize = 0;
 
+    type BlePeripheral = BluefruitSPI<
+        bluefruitspi::imxrt::ImxrtSdepSpi<4>,
+        hal::gpio::Output<pins::common::P10>,
+        hal::gpio::Output<pins::common::P14>,
+        hal::gpio::Input<pins::tmm::P39>,
+        Mono,
+    >;
+
     #[local]
     struct Local {
         poll_log: hal::pit::Pit<3>,
         log_poller: logging::Poller,
         rebootor: Rebootor<'static>,
-        ble: BluefruitSPI<
-            bluefruitspi::imxrt::ImxrtSdepSpi<4>,
-            hal::gpio::Output<pins::common::P10>,
-            hal::gpio::Output<pins::common::P14>,
-            hal::gpio::Input<pins::tmm::P39>,
-            Mono,
-        >,
+        ble: BlePeripheral,
     }
 
     #[shared]
@@ -85,7 +87,7 @@ mod app {
             uart.enable_fifo(hal::lpuart::Watermark::tx(4));
         });
         log_uart
-            .write_all("\r\n===== Bluefruit LE SPI Friend example =====\r\n\r\n".as_bytes())
+            .write_all("\r\n===== Bluefruit LE SPI Friend echo example =====\r\n\r\n".as_bytes())
             .unwrap();
         log_uart.flush().unwrap();
         let log_poller =
@@ -130,68 +132,65 @@ mod app {
         )
     }
 
-    #[task(priority = 3, local = [ble])]
-    async fn ble(ctx: ble::Context) {
-        let ble::LocalResources { ble, .. } = ctx.local;
+    async fn ble_controller(
+        ble: &mut BlePeripheral,
+    ) -> Result<bluefruitspi::Infallible, bluefruitspi::Error<bluefruitspi::Infallible>> {
+        let mut uart_buffer = [0u8; bluefruitspi::UART_RX_MIN_BUFFER_SIZE];
 
         // Initialize the device and perform a factory reset
-        ble.init().await.unwrap();
-        ble.command(b"AT+FACTORYRESET").await.unwrap();
+        ble.init().await?;
+        ble.command(b"AT+FACTORYRESET").await?;
         Mono::delay(1.secs_at_least()).await;
 
         // Print the response to 'ATI' (info request)
         log::info!(
             "ATI Command:\r\n{}",
-            core::str::from_utf8(ble.command(b"ATI").await.unwrap()).unwrap()
+            core::str::from_utf8(ble.command(b"ATI").await?)
+                .map_err(|_| bluefruitspi::Error::ResponseInvalid)?
         );
 
         // Change advertised name
-        ble.command(b"AT+GAPDEVNAME=Rust meets BLE").await.unwrap();
+        ble.command(b"AT+GAPDEVNAME=Rust meets BLE").await?;
 
         // Set LED to blink on BLE UART traffic
-        ble.command(b"AT+HWMODELED=BLEUART").await.unwrap();
+        ble.command(b"AT+HWMODELED=BLEUART").await?;
 
         loop {
-            while !ble.connected().await.unwrap() {
-                log::info!("Waiting for connection ...");
-                Mono::delay(500.millis_at_least()).await;
+            log::info!("Waiting for connection ...");
+            while !ble.connected().await? {
+                Mono::delay(5.millis_at_least()).await;
             }
 
             log::info!("Connected!");
 
-            let mut counter = 250;
-            let mut t_last = Mono::now();
-            let mut num_received = 0;
-            while ble.connected().await.unwrap() {
-                // if let Err(e) = ble
-                //     .uart_tx(
-                //         core::iter::once(counter)
-                //             .chain((0u16..2048).map(|i| i as u8))
-                //             .chain(core::iter::once(counter)),
-                //     )
-                //     .await
-                // {
-                //     log::error!("Uart TX failed: {}", e);
-                // }
-                //counter = counter.wrapping_add(1);
+            while ble.connected().await? {
                 loop {
-                    let received = ble.uart_rx().await.unwrap();
-                    num_received += received.len();
+                    let received = ble.uart_rx(&mut uart_buffer).await?;
                     if received.is_empty() {
                         break;
                     }
-                    log::info!(" <- {}", received.len());
+
+                    log::info!("Echoing {} bytes: {:?}", received.len(), received);
+
+                    ble.uart_tx(received.iter().cloned()).await?;
                 }
-                let t_now = Mono::now();
-                let t_diff = t_now - t_last;
-                if t_diff.to_millis() > 1000 {
-                    t_last = t_now;
-                    let bytes_per_second =
-                        num_received as f32 / (t_diff.to_millis() as f32 / 1000.0);
-                    log::info!("Throughput RX: {} bytes/sec", bytes_per_second);
-                    num_received = 0;
-                }
+
+                Mono::delay(10.millis()).await;
             }
+
+            log::info!("Disconnected!");
+        }
+    }
+
+    #[task(priority = 3, local = [ble])]
+    async fn ble(ctx: ble::Context) {
+        let ble::LocalResources { ble, .. } = ctx.local;
+
+        loop {
+            let e = ble_controller(ble).await.unwrap_err();
+            log::error!("BLE seems to have crashed: {}", e);
+            log::info!("Restarting BLE ...");
+            Mono::delay(100.millis()).await;
         }
     }
 
