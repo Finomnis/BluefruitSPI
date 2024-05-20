@@ -132,13 +132,13 @@ where
 
     async fn raw_command(
         &mut self,
-        command: &mut dyn Iterator<Item = &u8>,
+        data_iter: &mut dyn Iterator<Item = &u8>,
     ) -> Result<&[u8], Error<SPI::Error>> {
         let msg = self
             .sdep
             .execute_command(
                 sdep::CommandType::AtWrapper,
-                &mut command.chain(b"\n").copied(),
+                &mut data_iter.chain(b"\n").copied(),
                 &mut self.static_buffer,
                 &mut self.delay,
             )
