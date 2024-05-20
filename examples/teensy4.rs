@@ -164,7 +164,7 @@ mod app {
                 if let Err(e) = ble
                     .uart_tx(
                         core::iter::once(counter)
-                            .chain(0..100)
+                            .chain((0u16..2048).map(|i| i as u8))
                             .chain(core::iter::once(counter)),
                     )
                     .await

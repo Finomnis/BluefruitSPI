@@ -10,6 +10,7 @@ use snafu::prelude::*;
 
 mod delays;
 pub mod sdep;
+mod sdep_driver;
 
 #[cfg(feature = "imxrt")]
 #[cfg_attr(docsrs, doc(cfg(feature = "imxrt")))]
@@ -57,105 +58,12 @@ pub trait SpiBus {
     ) -> Result<(), Self::Error>;
 }
 
-struct SdepDriver<SPI, CS> {
-    spi: SPI,
-    cs: CS,
-    buffer: [u8; sdep::SDEP_MAX_MESSAGE_SIZE],
-}
-
 /// Driver for Adafruit Bluefruit LE SPI Friend.
 pub struct BluefruitSPI<SPI, CS, RST, IRQ, DELAY> {
-    sdep: SdepDriver<SPI, CS>,
+    sdep: sdep_driver::SdepDriver<IRQ, SPI, CS>,
     _reset: RST,
-    irq: IRQ,
     delay: DELAY,
     command_buffer: [u8; 256],
-}
-
-impl<SPI, CS> SdepDriver<SPI, CS>
-where
-    SPI: SpiBus,
-    CS: embedded_hal::digital::OutputPin,
-{
-    /// Write a raw SDEP message to the device
-    async fn write<'a, DELAY: embedded_hal_async::delay::DelayNs>(
-        &mut self,
-        msg: sdep::Message<'a>,
-        delay: &mut DELAY,
-    ) -> Result<(), Error<SPI::Error>> {
-        let data = msg.to_bytes(&mut self.buffer);
-
-        let mut iteration = 0;
-        loop {
-            self.cs.set_low().unwrap();
-            delay.delay_us(delays::CS_TO_SCK_US).await;
-            let result = self.spi.transmit(data);
-            self.cs.set_high().unwrap();
-
-            let write_response = result.map_err(|source| Error::SpiBus { source })?;
-            match sdep::MessageType::from_repr(write_response) {
-                Some(sdep::MessageType::DeviceReadOverflow) => break,
-                Some(sdep::MessageType::DeviceNotReady) => Ok(()),
-                _ => Err(Error::WriteResponseInvalid {
-                    response: write_response,
-                }),
-            }?;
-
-            delay.delay_us(delays::WRITE_RETRY_DELAY_US).await;
-
-            if iteration >= delays::WRITE_RETRY_COUNT {
-                return Err(Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                });
-            }
-            iteration += 1;
-        }
-
-        if msg.more_data() {
-            delay.delay_us(delays::BETWEEN_SDEP_WRITE_US).await;
-        } else {
-            delay.delay_us(delays::AFTER_SDEP_WRITE_US).await;
-        }
-
-        Ok(())
-    }
-
-    /// Write a raw SDEP message to the device
-    async fn read<DELAY: embedded_hal_async::delay::DelayNs>(
-        &mut self,
-        delay: &mut DELAY,
-    ) -> Result<sdep::Message, Error<SPI::Error>> {
-        let buffer = &mut self.buffer;
-
-        self.cs.set_low().unwrap();
-        delay.delay_us(delays::CS_TO_SCK_US).await;
-        let spi_result = self.spi.receive(buffer);
-        self.cs.set_high().unwrap();
-
-        spi_result.map_err(|source| Error::SpiBus { source })?;
-
-        let result = sdep::Message::from_bytes(buffer).map_err(|source| Error::Sdep { source });
-
-        let delay_us = match &result {
-            Ok(msg) => {
-                if msg.more_data() {
-                    delays::BETWEEN_SDEP_READ_US
-                } else {
-                    delays::AFTER_SDEP_READ_US
-                }
-            }
-            Err(e) => match e {
-                Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                } => delays::BETWEEN_SDEP_READ_US,
-                _ => delays::AFTER_SDEP_READ_US,
-            },
-        };
-
-        delay.delay_us(delay_us).await;
-
-        result
-    }
 }
 
 impl<SPI, CS, RST, IRQ, DELAY> BluefruitSPI<SPI, CS, RST, IRQ, DELAY>
@@ -163,7 +71,7 @@ where
     SPI: SpiBus,
     CS: embedded_hal::digital::OutputPin,
     RST: embedded_hal::digital::OutputPin,
-    IRQ: embedded_hal::digital::InputPin, //TODO: use interrupts + embedded_hal_async::digital::Wait,
+    IRQ: embedded_hal::digital::InputPin,
     DELAY: embedded_hal_async::delay::DelayNs,
 {
     /// Create a new instance of this driver.
@@ -184,13 +92,8 @@ where
         cassette::block_on(delay.delay_ms(delays::AFTER_RESET_MS));
 
         Self {
-            sdep: SdepDriver {
-                spi,
-                cs,
-                buffer: [0u8; sdep::SDEP_MAX_MESSAGE_SIZE],
-            },
+            sdep: sdep_driver::SdepDriver::new(irq, spi, cs),
             _reset: reset,
-            irq,
             delay,
             command_buffer: [0u8; 256],
         }
@@ -220,164 +123,29 @@ where
         &mut self,
         data_iter: &mut dyn Iterator<Item = u8>,
     ) -> Result<&[u8], Error<SPI::Error>> {
-        // Prepare data
-        let mut data = {
-            let mut data_size = 0;
-            let data = &mut self.command_buffer[..127];
-
-            for elem in data.iter_mut() {
-                match data_iter.next() {
-                    Some(val) => {
-                        *elem = val;
-                        data_size += 1;
-                    }
-                    None => {
-                        break;
-                    }
-                }
-            }
-
-            if data_iter.next().is_some() {
-                return Err(Error::CommandPayloadTooLong);
-            }
-
-            &data[..data_size]
-        };
-
-        // Send Command
-        while !data.is_empty() {
-            let more_data = data.len() > sdep::SDEP_MAX_PAYLOAD_SIZE;
-            let payload_len = data.len().min(sdep::SDEP_MAX_PAYLOAD_SIZE);
-            let (payload, leftover) = data.split_at(payload_len);
-            data = leftover;
-
-            self.sdep
-                .write(
-                    sdep::Message::Command {
-                        id: sdep::CommandType::AtWrapper.into(),
-                        payload,
-                        more_data,
-                    },
-                    &mut self.delay,
-                )
-                .await?;
-        }
-
-        // Wait for response
-        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
-        while !self.irq.is_high().unwrap() {
-            if timeout_left == 0 {
-                return Err(Error::Timeout);
-            }
-
-            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
-            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
-        }
-
-        // Read response
-        let data = &mut self.command_buffer;
-        let mut data_size = 0;
-
-        loop {
-            if !self.irq.is_high().unwrap() {
-                return Err(Error::ResponsePayloadIncomplete);
-            }
-
-            match self.sdep.read(&mut self.delay).await {
-                Ok(msg) => match msg {
-                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Response {
-                        id,
-                        payload,
-                        more_data,
-                    } => {
-                        if id != sdep::CommandType::AtWrapper.into() {
-                            return Err(Error::ResponseInvalid);
-                        }
-                        for word in payload {
-                            *data
-                                .get_mut(data_size)
-                                .ok_or(Error::ResponsePayloadTooLong)? = *word;
-                            data_size += 1;
-                        }
-                        if !more_data {
-                            break;
-                        }
-                    }
-                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
-                },
-                Err(Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                }) => {
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(&data[..data_size])
-    }
-
-    async fn raw_uart_tx(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error>> {
-        // Send data
         self.sdep
-            .write(
-                sdep::Message::Command {
-                    id: sdep::CommandType::BleUartTx.into(),
-                    payload: data,
-                    more_data: false,
-                },
+            .execute_command(
+                sdep::CommandType::AtWrapper,
+                data_iter,
+                &mut self.command_buffer,
                 &mut self.delay,
             )
-            .await?;
+            .await
+    }
 
-        // Wait for response
-        let mut timeout_left = delays::RESPONSE_TIMEOUT_MS;
-        while !self.irq.is_high().unwrap() {
-            if timeout_left == 0 {
-                return Err(Error::Timeout);
-            }
-
-            self.delay.delay_ms(delays::IRQ_POLL_PERIOD_MS).await;
-            timeout_left = timeout_left.saturating_sub(delays::IRQ_POLL_PERIOD_MS);
-        }
-
-        // Read response
-        loop {
-            if !self.irq.is_high().unwrap() {
-                return Err(Error::ResponsePayloadIncomplete);
-            }
-
-            match self.sdep.read(&mut self.delay).await {
-                Ok(msg) => match msg {
-                    sdep::Message::Command { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Response {
-                        id,
-                        payload,
-                        more_data,
-                    } => {
-                        if id != sdep::CommandType::BleUartTx.into()
-                            || !payload.is_empty()
-                            || more_data
-                        {
-                            return Err(Error::ResponseInvalid);
-                        }
-                        break;
-                    }
-                    sdep::Message::Alert { .. } => return Err(Error::ResponseInvalid),
-                    sdep::Message::Error { id } => return Err(Error::ErrorResponse { id }),
-                },
-                Err(Error::Sdep {
-                    source: sdep::Error::DeviceNotReady,
-                }) => {
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(())
+    async fn raw_uart_tx(
+        &mut self,
+        data_iter: &mut dyn Iterator<Item = u8>,
+    ) -> Result<(), Error<SPI::Error>> {
+        self.sdep
+            .execute_command(
+                sdep::CommandType::BleUartTx,
+                data_iter,
+                &mut [],
+                &mut self.delay,
+            )
+            .await
+            .map(|_| ())
     }
 
     /// Send a fully formed bytestring AT command, and check
@@ -409,9 +177,11 @@ where
         &mut self,
         data: impl IntoIterator<Item = u8>,
     ) -> Result<(), Error<SPI::Error>> {
-        let mut chunk_buffer = [0u8; sdep::SDEP_MAX_PAYLOAD_SIZE];
+        /// Completely heuristic ...
+        /// Seems to break at somewhere around ~300, so let's be safe and choose a smaller value
+        const UART_TX_MAX_BURST_SIZE: usize = 128;
 
-        let mut data = data.into_iter();
+        let mut data = data.into_iter().peekable();
 
         let mut finished = false;
         while !finished {
@@ -425,20 +195,22 @@ where
             };
 
             while !finished && tx_fifo_space > 0 {
-                let mut chunk_size = 0;
-                for el in chunk_buffer.iter_mut().take(tx_fifo_space) {
-                    if let Some(next_data) = data.next() {
-                        *el = next_data;
-                        chunk_size += 1;
-                    } else {
-                        finished = true;
-                        break;
-                    }
+                let current_burst = tx_fifo_space.min(UART_TX_MAX_BURST_SIZE);
+
+                let mut num_transmitted = 0;
+                if data.peek().is_some() {
+                    self.raw_uart_tx(
+                        &mut (&mut data)
+                            .take(current_burst)
+                            .inspect(|_| num_transmitted += 1),
+                    )
+                    .await?;
                 }
 
-                if chunk_size > 0 {
-                    self.raw_uart_tx(&chunk_buffer[..chunk_size]).await?;
-                    tx_fifo_space -= chunk_size;
+                tx_fifo_space -= num_transmitted;
+
+                if num_transmitted < current_burst {
+                    finished = true;
                 }
             }
         }

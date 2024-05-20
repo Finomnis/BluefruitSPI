@@ -17,7 +17,7 @@ pub const SDEP_MAX_MESSAGE_SIZE: usize = SDEP_MAX_PAYLOAD_SIZE + 4;
 ///
 /// Note that this list is not exhaustive,
 /// future protocol changes could add new IDs.
-#[derive(FromRepr, Debug, Eq, PartialEq)]
+#[derive(FromRepr, Debug, Clone, Copy, Eq, PartialEq)]
 #[repr(u16)]
 pub enum CommandType {
     /// Initializes/resets the device.
