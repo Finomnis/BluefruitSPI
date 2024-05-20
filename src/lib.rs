@@ -157,20 +157,15 @@ where
             .map(|val| val == b"1\r\n")
     }
 
-    /// Sends the specific bytestring out over BLE UART.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The bytestring to send.
-    pub async fn uart_tx(
+    async fn raw_uart_tx(
         &mut self,
-        data: impl IntoIterator<Item = u8>,
+        data_iter: &mut dyn Iterator<Item = u8>,
     ) -> Result<(), Error<SPI::Error>> {
         /// Completely heuristic ...
         /// Seems to break at somewhere around ~300, so let's be safe and choose a smaller value
         const UART_TX_MAX_BURST_SIZE: usize = 128;
 
-        let mut data = data.into_iter().peekable();
+        let mut data = data_iter.peekable();
 
         let mut finished = false;
         while !finished {
@@ -223,6 +218,18 @@ where
                 &mut self.delay,
             )
             .await
+    }
+
+    /// Sends the specific bytestring out over BLE UART.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The bytestring to send.
+    pub async fn uart_tx(
+        &mut self,
+        data: impl IntoIterator<Item = u8>,
+    ) -> Result<(), Error<SPI::Error>> {
+        self.raw_uart_tx(&mut data.into_iter()).await
     }
 }
 
