@@ -160,19 +160,37 @@ mod app {
             log::info!("Connected!");
 
             let mut counter = 250;
+            let mut t_last = Mono::now();
+            let mut num_received = 0;
             while ble.connected().await.unwrap() {
-                if let Err(e) = ble
-                    .uart_tx(
-                        core::iter::once(counter)
-                            .chain((0u16..2048).map(|i| i as u8))
-                            .chain(core::iter::once(counter)),
-                    )
-                    .await
-                {
-                    log::error!("Uart TX failed: {}", e);
+                // if let Err(e) = ble
+                //     .uart_tx(
+                //         core::iter::once(counter)
+                //             .chain((0u16..2048).map(|i| i as u8))
+                //             .chain(core::iter::once(counter)),
+                //     )
+                //     .await
+                // {
+                //     log::error!("Uart TX failed: {}", e);
+                // }
+                //counter = counter.wrapping_add(1);
+                loop {
+                    let received = ble.uart_rx().await.unwrap();
+                    num_received += received.len();
+                    if received.is_empty() {
+                        break;
+                    }
+                    log::info!(" <- {}", received.len());
                 }
-                counter = counter.wrapping_add(1);
-                Mono::delay(1.secs_at_least()).await;
+                let t_now = Mono::now();
+                let t_diff = t_now - t_last;
+                if t_diff.to_millis() > 1000 {
+                    t_last = t_now;
+                    let bytes_per_second =
+                        num_received as f32 / (t_diff.to_millis() as f32 / 1000.0);
+                    log::info!("Throughput RX: {} bytes/sec", bytes_per_second);
+                    num_received = 0;
+                }
             }
         }
     }

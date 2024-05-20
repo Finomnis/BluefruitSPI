@@ -5,12 +5,12 @@ use strum::FromRepr;
 
 /// The maximum size of an SDEP payload.
 ///
-/// See https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport.
+/// See <https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport>.
 pub const SDEP_MAX_PAYLOAD_SIZE: usize = 16;
 
 /// The maximum size of an SDEP message.
 ///
-/// See https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport.
+/// See <https://learn.adafruit.com/introducing-the-adafruit-bluefruit-spi-breakout/sdep-spi-data-transport>.
 pub const SDEP_MAX_MESSAGE_SIZE: usize = SDEP_MAX_PAYLOAD_SIZE + 4;
 
 /// The `id` field of a [`Message::Command`] or [`Message::Response`].
