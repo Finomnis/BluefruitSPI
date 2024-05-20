@@ -19,6 +19,17 @@ pub mod imxrt;
 /// The recommended SPI bitrate for communication
 pub const RECOMMENDED_SPI_BITRATE_HZ: u32 = 4_000_000;
 
+/// The size of the static buffer used for communication.
+/// Determined heuristically.
+///
+/// For example, used in Uart RX. It's nowhere specified what the
+/// max size of a UART RX burst is, but it seems to be 64 from experiments.
+///
+/// So far, 256 was enough for everything we used it for.
+/// If firmware changes this at some point, no undefined behavior will happen,
+/// and instead an error will get returned.
+const STATIC_BUFFER_SIZE: usize = 256;
+
 /// SPI Bus the Adafruit Bluefruit LE SPI Friend is attached to.
 ///
 /// The bus should run at 4MHz, SPI Mode 0, MSB first.
@@ -63,7 +74,7 @@ pub struct BluefruitSPI<SPI, CS, RST, IRQ, DELAY> {
     sdep: sdep_driver::SdepDriver<IRQ, SPI, CS>,
     _reset: RST,
     delay: DELAY,
-    command_buffer: [u8; 256],
+    static_buffer: [u8; STATIC_BUFFER_SIZE],
 }
 
 impl<SPI, CS, RST, IRQ, DELAY> BluefruitSPI<SPI, CS, RST, IRQ, DELAY>
@@ -95,7 +106,7 @@ where
             sdep: sdep_driver::SdepDriver::new(irq, spi, cs),
             _reset: reset,
             delay,
-            command_buffer: [0u8; 256],
+            static_buffer: [0u8; STATIC_BUFFER_SIZE],
         }
     }
 
@@ -119,35 +130,6 @@ where
         result
     }
 
-    async fn raw_command(
-        &mut self,
-        data_iter: &mut dyn Iterator<Item = u8>,
-    ) -> Result<&[u8], Error<SPI::Error>> {
-        self.sdep
-            .execute_command(
-                sdep::CommandType::AtWrapper,
-                data_iter,
-                &mut self.command_buffer,
-                &mut self.delay,
-            )
-            .await
-    }
-
-    async fn raw_uart_tx(
-        &mut self,
-        data_iter: &mut dyn Iterator<Item = u8>,
-    ) -> Result<(), Error<SPI::Error>> {
-        self.sdep
-            .execute_command(
-                sdep::CommandType::BleUartTx,
-                data_iter,
-                &mut [],
-                &mut self.delay,
-            )
-            .await
-            .map(|_| ())
-    }
-
     /// Send a fully formed bytestring AT command, and check
     /// whether we got an `OK` back.
     ///
@@ -156,8 +138,15 @@ where
     /// The response payload, if there is any.
     pub async fn command(&mut self, command: &[u8]) -> Result<&[u8], Error<SPI::Error>> {
         let msg = self
-            .raw_command(&mut command.iter().chain(b"\n").copied())
+            .sdep
+            .execute_command(
+                sdep::CommandType::AtWrapper,
+                &mut command.iter().chain(b"\n").copied(),
+                &mut self.static_buffer,
+                &mut self.delay,
+            )
             .await?;
+
         msg.strip_suffix(b"OK\r\n").ok_or(Error::NotOk)
     }
 
@@ -199,12 +188,16 @@ where
 
                 let mut num_transmitted = 0;
                 if data.peek().is_some() {
-                    self.raw_uart_tx(
-                        &mut (&mut data)
-                            .take(current_burst)
-                            .inspect(|_| num_transmitted += 1),
-                    )
-                    .await?;
+                    self.sdep
+                        .execute_command(
+                            sdep::CommandType::BleUartTx,
+                            &mut (&mut data)
+                                .take(current_burst)
+                                .inspect(|_| num_transmitted += 1),
+                            &mut [],
+                            &mut self.delay,
+                        )
+                        .await?;
                 }
 
                 tx_fifo_space -= num_transmitted;
@@ -216,6 +209,20 @@ where
         }
 
         Ok(())
+    }
+
+    /// Reads available bytes from BLE UART.
+    ///
+    /// Returns an empty slice if no bytes are available.
+    pub async fn uart_rx(&mut self) -> Result<&[u8], Error<SPI::Error>> {
+        self.sdep
+            .execute_command(
+                sdep::CommandType::BleUartRx,
+                &mut core::iter::empty(),
+                &mut self.static_buffer,
+                &mut self.delay,
+            )
+            .await
     }
 }
 
