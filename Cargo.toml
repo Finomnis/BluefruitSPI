@@ -34,12 +34,13 @@ imxrt-iomuxc = { version = "0.2.6", optional = true }
 
 rtic = { version = "2.1.0", features = ["thumbv7-backend"] }
 
-teensy4-bsp = { version = "0.4.7", features = ["rt"] }
+teensy4-bsp = { version = "0.5.0", features = ["rt"] }
 teensy4-panic = { version = "0.2.3", default-features = false }
 teensy4-selfrebootor = "0.2.0"
 
 usb-device = "0.2.9"
 
+imxrt-hal = "0.5.5"
 imxrt-uart-panic = "0.1.2"
 imxrt-log = { version = "0.1.1", default-features = false, features = [
     "log",
@@ -48,10 +49,6 @@ imxrt-log = { version = "0.1.1", default-features = false, features = [
 
 embedded-io = "0.6.1"
 rtic-monotonics = { version = "2.0.0", features = ["imxrt_gpt1"] }
-
-[patch.crates-io]
-imxrt-hal = { git = "https://github.com/imxrt-rs/imxrt-hal", rev = "b9a82455ffa967b5612ec5ecee52c2b11d45e6cc" }
-rtic-monotonics = { git = "https://github.com/rtic-rs/rtic", rev = "04b655d4faa7b93c8e3838bbad46efb72f5f4570" }
 
 
 # cargo build/run

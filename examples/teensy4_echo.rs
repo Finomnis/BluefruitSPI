@@ -19,7 +19,6 @@ mod app {
 
     use bsp::board;
     use bsp::hal;
-    use bsp::logging;
     use bsp::pins;
 
     use embedded_io::Write;
@@ -56,7 +55,7 @@ mod app {
     #[local]
     struct Local {
         poll_log: hal::pit::Pit<3>,
-        log_poller: logging::Poller,
+        log_poller: imxrt_log::Poller,
         rebootor: Rebootor<'static>,
         ble: BlePeripheral,
     }
@@ -91,7 +90,7 @@ mod app {
             .unwrap();
         log_uart.flush().unwrap();
         let log_poller =
-            logging::log::lpuart(log_uart, log_dma, logging::Interrupts::Enabled).unwrap();
+            imxrt_log::log::lpuart(log_uart, log_dma, imxrt_log::Interrupts::Enabled).unwrap();
         poll_log.set_interrupt_enable(true);
         poll_log.set_load_timer_value(LOG_POLL_INTERVAL);
         poll_log.enable();
